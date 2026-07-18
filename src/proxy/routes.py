@@ -136,6 +136,7 @@ async def _generate_sse(
     parser = SSEEventParser()
     window = SlidingWindow()
     last_content_delta: ContentDelta | None = None
+    pending_structural_delta: ContentDelta | None = None
 
     try:
         async for text_chunk in upstream_response.aiter_text():
@@ -145,13 +146,30 @@ async def _generate_sse(
                     released = window.flush()
                     if released and last_content_delta is not None:
                         yield serialize_content_delta(last_content_delta, released)
+                    if pending_structural_delta is not None:
+                        yield serialize_content_delta(
+                            pending_structural_delta, pending_structural_delta.content
+                        )
                     yield serialize_done()
                     return
                 if _has_content_slot(parsed):
                     last_content_delta = parsed
-                released = window.feed(parsed.content)
-                if released:
-                    yield serialize_content_delta(parsed, released)
+                    released = window.feed(parsed.content)
+                    if released:
+                        yield serialize_content_delta(parsed, released)
+                else:
+                    # Structural event with no content slot (the
+                    # finish_reason chunk) — nothing to buffer, but
+                    # forwarding it immediately would let it reach the
+                    # client before content still held back in the
+                    # window, corrupting order (finish_reason must be
+                    # the last signal, not an early one). Defer it until
+                    # the window is flushed, at [DONE] or the
+                    # mid-stream-drop fallback below — whichever comes
+                    # first. Only the most recent such event survives if
+                    # more than one arrives; no real provider sends more
+                    # than one per response.
+                    pending_structural_delta = parsed
     except (httpx.TransportError, UpstreamError):
         # Mid-stream drop, or a malformed event discovered mid-stream
         # (parse_event() raises UpstreamError for that — Task 4): by
@@ -182,10 +200,14 @@ async def _generate_sse(
             continue
         if _has_content_slot(parsed):
             last_content_delta = parsed
-        released = window.feed(parsed.content)
-        if released:
-            yield serialize_content_delta(parsed, released)
+            released = window.feed(parsed.content)
+            if released:
+                yield serialize_content_delta(parsed, released)
+        else:
+            pending_structural_delta = parsed
     final = window.flush()
     if final and last_content_delta is not None:
         yield serialize_content_delta(last_content_delta, final)
+    if pending_structural_delta is not None:
+        yield serialize_content_delta(pending_structural_delta, pending_structural_delta.content)
     yield serialize_done()
