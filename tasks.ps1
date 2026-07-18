@@ -10,6 +10,7 @@
 .EXAMPLE
     .\tasks.ps1 install
     .\tasks.ps1 run
+    .\tasks.ps1 mock
     .\tasks.ps1 test
     .\tasks.ps1 lint
     .\tasks.ps1 typecheck
@@ -18,7 +19,7 @@
 
 param(
     [Parameter(Position = 0)]
-    [ValidateSet("install", "run", "test", "lint", "typecheck", "check")]
+    [ValidateSet("install", "run", "mock", "test", "lint", "typecheck", "check")]
     [string]$Task = "check"
 )
 
@@ -30,6 +31,13 @@ switch ($Task) {
     }
     "run" {
         uvicorn app.main:app --reload --port 8080
+    }
+    "mock" {
+        # The mock upstream must be running for the gateway to have
+        # anything to forward to in mock mode (UPSTREAM_BASE_URL
+        # defaults, in .env.example, to this port). Run in a second
+        # terminal alongside `run`.
+        uvicorn src.mock_upstream.main:app --reload --port 8081
     }
     "test" {
         pytest

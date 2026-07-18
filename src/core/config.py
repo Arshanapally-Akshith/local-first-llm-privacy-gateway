@@ -11,7 +11,7 @@ misconfigured deployment fails at startup and never at first request
 from functools import lru_cache
 from typing import Literal
 
-from pydantic import Field, SecretStr, model_validator
+from pydantic import Field, SecretStr
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -39,10 +39,23 @@ class Settings(BaseSettings):
     every test, benchmark, and demo (ARCHITECTURE.md, Executive Summary).
     """
 
-    upstream_base_url: str | None = None
-    """Upstream endpoint. Required only when upstream_mode == "live";
-    enforced by the validator below rather than given a default, since
-    any default here could silently point `live` mode at nothing."""
+    upstream_base_url: str = Field(min_length=1)
+    """Upstream endpoint. Required in both mock and live modes, with no
+    code-level default — mock and live upstreams are interchangeable
+    purely by which URL is configured (ARCHITECTURE.md), so inventing a
+    default for the mock case would be exactly the kind of hidden
+    runtime default this project's configuration rules forbid. The
+    value to use for mock mode is documented, explicitly, in
+    .env.example."""
+
+    upstream_timeout: float = Field(gt=0, default=30.0)
+    """Upstream request timeout, in seconds. Defaulted (unlike
+    fail_mode/session_ttl/fpe_key): a missing timeout would still need
+    *some* value for the HTTP client to function at all, and getting it
+    wrong is a reliability question, not a security one — no default
+    here silently changes what the gateway does or doesn't sanitise.
+    30.0 is a guess, not a measurement; revisit once Phase 7's latency
+    harness has real numbers."""
 
     fpe_key: SecretStr = Field(min_length=1)
     """FF1 key (used starting Phase 2). Required, no default. Typed as
@@ -66,16 +79,6 @@ class Settings(BaseSettings):
     """Logging verbosity. Safe to default regardless of value: CLAUDE.md's
     logging rule is that no level, including DEBUG, may ever emit
     plaintext PII — the guarantee is structural, not level-gated."""
-
-    @model_validator(mode="after")
-    def _require_upstream_base_url_when_live(self) -> "Settings":
-        if self.upstream_mode == "live" and not self.upstream_base_url:
-            raise ValueError(
-                "UPSTREAM_BASE_URL is required when UPSTREAM_MODE=live. "
-                "Set it to the provider's API base URL, or switch "
-                "UPSTREAM_MODE back to 'mock' to run without one."
-            )
-        return self
 
 
 @lru_cache

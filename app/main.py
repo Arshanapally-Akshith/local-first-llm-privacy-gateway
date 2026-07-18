@@ -7,15 +7,31 @@ Phase 0 DoD: "missing required var fails loudly at startup, not at
 first request").
 """
 
-from fastapi import FastAPI
+from fastapi import FastAPI, Request
+from fastapi.responses import JSONResponse
 
 from src.core.config import get_settings
+from src.core.exceptions import UpstreamError
 from src.core.logging import configure_logging
+from src.proxy.routes import router as proxy_router
 
 settings = get_settings()
 configure_logging(settings.log_level)
 
 app = FastAPI()
+app.include_router(proxy_router)
+
+
+@app.exception_handler(UpstreamError)
+async def _handle_upstream_error(_request: Request, exc: UpstreamError) -> JSONResponse:
+    """Turn a raised UpstreamError into its carried status code.
+
+    FastAPI does not do this for an arbitrary exception type by
+    default — without this handler, UpstreamError would surface as a
+    generic 500, discarding the 502/504 distinction the proxy layer
+    already worked out (ARCHITECTURE.md, Error Handling).
+    """
+    return JSONResponse(status_code=exc.status_code, content={"error": str(exc)})
 
 
 @app.get("/health")

@@ -1,15 +1,19 @@
 """Shared test setup.
 
 Provides synthetic (non-secret) values for the configuration fields that
-have no default — FPE_KEY, SESSION_TTL, FAIL_MODE — before any test
-module is collected. app/main.py constructs Settings at import time, so
-these must exist before the *first* import of app.main in this process,
-not inside a fixture that runs later. Using `setdefault` means a
-developer's real `.env` (if present) is never overridden.
+have no default — FPE_KEY, SESSION_TTL, FAIL_MODE, UPSTREAM_BASE_URL —
+before any test module is collected. app/main.py constructs Settings at
+import time, so these must exist before the *first* import of app.main
+in this process, not inside a fixture that runs later. Using
+`setdefault` means a developer's real `.env` (if present) is never
+overridden.
 
 These are placeholder strings for satisfying required-field validation
 in tests, not secrets — the same reasoning that lets `.env.example`
-itself be committed (CLAUDE.md, "Secrets only in .env").
+itself be committed (CLAUDE.md, "Secrets only in .env"). The
+UPSTREAM_BASE_URL placeholder is never actually dialled by most tests
+(they use httpx's ASGITransport or TestClient instead) — it only needs
+to be a syntactically plausible URL so Settings() validates.
 """
 
 import logging
@@ -23,6 +27,7 @@ from src.core.logging import get_gateway_logger
 os.environ.setdefault("FPE_KEY", "test-fpe-key-not-a-real-secret")
 os.environ.setdefault("SESSION_TTL", "1800")
 os.environ.setdefault("FAIL_MODE", "closed")
+os.environ.setdefault("UPSTREAM_BASE_URL", "http://127.0.0.1:8081")
 
 
 class _CollectingHandler(logging.Handler):
