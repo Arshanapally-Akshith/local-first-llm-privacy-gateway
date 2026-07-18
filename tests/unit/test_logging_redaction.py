@@ -9,7 +9,6 @@ bypasses log_event() entirely.
 
 import json
 import logging
-from collections.abc import Iterator
 
 import pytest
 
@@ -20,41 +19,6 @@ from src.core.logging import (
     log_event,
     redact_safe,
 )
-
-
-class _CollectingHandler(logging.Handler):
-    """Collects emitted LogRecords for direct inspection."""
-
-    def __init__(self) -> None:
-        super().__init__()
-        self.records: list[logging.LogRecord] = []
-
-    def emit(self, record: logging.LogRecord) -> None:
-        self.records.append(record)
-
-
-@pytest.fixture()
-def captured_records() -> Iterator[list[logging.LogRecord]]:
-    """Capture records emitted on the gateway logger directly.
-
-    Deliberately does not use pytest's `caplog`: caplog's capturing
-    handler is attached to the *root* logger, and relies on propagation
-    to reach it. `configure_logging()` (invoked at `app.main` import
-    time) sets `propagate = False` on the gateway logger — correctly,
-    since gateway records must never reach a handler this module didn't
-    attach — which means caplog silently sees nothing once any test in
-    the same process has imported `app.main`. Attaching a handler
-    directly to the gateway logger is what these tests actually need to
-    verify, and it is independent of import order across test files.
-    """
-    logger = get_gateway_logger()
-    logger.setLevel(logging.INFO)
-    handler = _CollectingHandler()
-    logger.addHandler(handler)
-    try:
-        yield handler.records
-    finally:
-        logger.removeHandler(handler)
 
 
 def test_redact_safe_returns_only_typed_fields() -> None:
