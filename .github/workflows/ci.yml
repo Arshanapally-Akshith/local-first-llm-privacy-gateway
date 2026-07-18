@@ -1,0 +1,36 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  checks:
+    runs-on: ubuntu-latest
+    # No secrets are configured for this job, and none are required: the
+    # mock upstream is the default and only upstream this repo's tests
+    # ever call, and tests/conftest.py supplies synthetic (non-secret)
+    # values for the config fields that have no default. See BUILD.md,
+    # ABSOLUTE CONSTRAINTS #2.
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+
+      - name: Install dependencies
+        run: pip install -r requirements-dev.txt
+
+      - name: Lint (ruff)
+        run: ruff check --line-length 100 .
+
+      - name: Type-check (mypy --strict on src and app)
+        run: |
+          mypy --strict src
+          mypy --strict app
+          mypy tests
+
+      - name: Test (pytest)
+        run: pytest tests
