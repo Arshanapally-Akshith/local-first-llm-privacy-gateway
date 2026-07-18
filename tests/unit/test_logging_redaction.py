@@ -9,6 +9,7 @@ bypasses log_event() entirely.
 
 import json
 import logging
+from collections.abc import Iterator
 
 import pytest
 
@@ -19,6 +20,41 @@ from src.core.logging import (
     log_event,
     redact_safe,
 )
+
+
+class _CollectingHandler(logging.Handler):
+    """Collects emitted LogRecords for direct inspection."""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.records: list[logging.LogRecord] = []
+
+    def emit(self, record: logging.LogRecord) -> None:
+        self.records.append(record)
+
+
+@pytest.fixture()
+def captured_records() -> Iterator[list[logging.LogRecord]]:
+    """Capture records emitted on the gateway logger directly.
+
+    Deliberately does not use pytest's `caplog`: caplog's capturing
+    handler is attached to the *root* logger, and relies on propagation
+    to reach it. `configure_logging()` (invoked at `app.main` import
+    time) sets `propagate = False` on the gateway logger — correctly,
+    since gateway records must never reach a handler this module didn't
+    attach — which means caplog silently sees nothing once any test in
+    the same process has imported `app.main`. Attaching a handler
+    directly to the gateway logger is what these tests actually need to
+    verify, and it is independent of import order across test files.
+    """
+    logger = get_gateway_logger()
+    logger.setLevel(logging.INFO)
+    handler = _CollectingHandler()
+    logger.addHandler(handler)
+    try:
+        yield handler.records
+    finally:
+        logger.removeHandler(handler)
 
 
 def test_redact_safe_returns_only_typed_fields() -> None:
@@ -75,26 +111,24 @@ def test_redact_safe_rejects_invalid_span(span_start: int, span_end: int) -> Non
 
 
 def test_log_event_output_contains_only_whitelisted_fields(
-    caplog: pytest.LogCaptureFixture,
+    captured_records: list[logging.LogRecord],
 ) -> None:
     logger = get_gateway_logger()
-    logger.setLevel(logging.INFO)
     redacted = redact_safe(
         entity_type="AADHAAR", span_start=5, span_end=17, tier=1, surrogate="999912345678"
     )
 
-    with caplog.at_level(logging.INFO, logger="gateway"):
-        log_event(
-            logger,
-            "detection.span_resolved",
-            correlation_id="corr-1",
-            session_id="sess-1",
-            redacted=redacted,
-            latency_ms=1.5,
-        )
+    log_event(
+        logger,
+        "detection.span_resolved",
+        correlation_id="corr-1",
+        session_id="sess-1",
+        redacted=redacted,
+        latency_ms=1.5,
+    )
 
-    assert len(caplog.records) == 1
-    formatted = json.loads(PiiSafeFormatter().format(caplog.records[0]))
+    assert len(captured_records) == 1
+    formatted = json.loads(PiiSafeFormatter().format(captured_records[0]))
 
     expected_keys = {
         "timestamp",
@@ -123,21 +157,19 @@ def test_log_event_output_contains_only_whitelisted_fields(
 
 
 def test_formatter_never_emits_a_raw_bypass_call_message(
-    caplog: pytest.LogCaptureFixture,
+    captured_records: list[logging.LogRecord],
 ) -> None:
     """A call that bypasses log_event() entirely — e.g. a future bug that
     calls logger.info(f"...") directly — must not leak its message. This
     is the defense-in-depth layer: it holds even when the sanctioned API
     (log_event/redact_safe) is bypassed."""
     logger = get_gateway_logger()
-    logger.setLevel(logging.INFO)
     stand_in_for_a_real_pan = "ABCDE1234F"
 
-    with caplog.at_level(logging.INFO, logger="gateway"):
-        logger.info("plaintext leak attempt: %s", stand_in_for_a_real_pan)
+    logger.info("plaintext leak attempt: %s", stand_in_for_a_real_pan)
 
-    assert len(caplog.records) == 1
-    formatted_str = PiiSafeFormatter().format(caplog.records[0])
+    assert len(captured_records) == 1
+    formatted_str = PiiSafeFormatter().format(captured_records[0])
 
     assert stand_in_for_a_real_pan not in formatted_str
     assert "plaintext leak attempt" not in formatted_str
@@ -145,20 +177,18 @@ def test_formatter_never_emits_a_raw_bypass_call_message(
 
 
 def test_formatter_drops_unknown_extra_fields_instead_of_raising(
-    caplog: pytest.LogCaptureFixture,
+    captured_records: list[logging.LogRecord],
 ) -> None:
     """Simulates a hypothetical bug elsewhere attaching a non-whitelisted
     field directly. The formatter must drop it silently, not crash — a
     logging control that can take down the process on unexpected input
     is itself an availability risk."""
     logger = get_gateway_logger()
-    logger.setLevel(logging.INFO)
 
-    with caplog.at_level(logging.INFO, logger="gateway"):
-        logger.info("", extra={"real_entity_value": "Priya Sharma"})
+    logger.info("", extra={"real_entity_value": "Priya Sharma"})
 
-    assert len(caplog.records) == 1
-    formatted_str = PiiSafeFormatter().format(caplog.records[0])
+    assert len(captured_records) == 1
+    formatted_str = PiiSafeFormatter().format(captured_records[0])
 
     assert "Priya Sharma" not in formatted_str
     assert "real_entity_value" not in formatted_str
