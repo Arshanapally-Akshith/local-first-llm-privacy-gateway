@@ -9,7 +9,16 @@ def test_returns_one_detector_per_registered_entity_type() -> None:
     detectors = get_tier1_detectors()
 
     entity_types = [detector.entity_type for detector in detectors]
-    assert entity_types == ["AADHAAR", "CARD"]
+    assert entity_types == [
+        "AADHAAR",
+        "CARD",
+        "PAN",
+        "IFSC",
+        "UPI",
+        "VEHICLE_REG",
+        "EMAIL",
+        "PHONE",
+    ]
 
 
 def test_every_returned_detector_is_tier_one() -> None:

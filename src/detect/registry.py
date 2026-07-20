@@ -15,10 +15,22 @@ from typing import Final
 from src.detect.detector import Detector
 from src.detect.tier1.aadhaar import AadhaarDetector
 from src.detect.tier1.card import CardDetector
+from src.detect.tier1.email import EmailDetector
+from src.detect.tier1.ifsc import IfscDetector
+from src.detect.tier1.pan import PanDetector
+from src.detect.tier1.phone import PhoneDetector
+from src.detect.tier1.upi import UpiDetector
+from src.detect.tier1.vehicle_registration import VehicleRegistrationDetector
 
 _TIER1_DETECTORS: Final[tuple[Detector, ...]] = (
     AadhaarDetector(),
     CardDetector(),
+    PanDetector(),
+    IfscDetector(),
+    UpiDetector(),
+    VehicleRegistrationDetector(),
+    EmailDetector(),
+    PhoneDetector(),
 )
 """Registration order matters beyond insertion convenience: it is the
 tie-breaker ARCHITECTURE.md's Span Precedence rule uses between two
