@@ -26,3 +26,16 @@ class UpstreamError(GatewayError):
     def __init__(self, message: str, *, status_code: int) -> None:
         super().__init__(message)
         self.status_code = status_code
+
+
+class SurrogateDomainError(GatewayError):
+    """A value cannot be represented in its entity type's FF1 domain —
+    e.g. a span whose length the domain doesn't expect, or a value
+    containing a character outside the domain's alphabet.
+
+    Never caught to fall back to a pass-through: CLAUDE.md's Error
+    Handling is explicit that a surrogate domain mismatch must raise,
+    never silently emit the real value. The message states what
+    failed and the expected shape — never the real value itself
+    (CLAUDE.md: "no sensitive values in the message").
+    """

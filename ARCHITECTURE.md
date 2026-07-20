@@ -268,11 +268,11 @@ Tier 1 is microseconds, and its outputs are the only ones this system describes 
 | | |
 |---|---|
 | **Purpose** | Produce stateless, invertible, format-preserving surrogates for fixed-domain entities |
-| **Responsibilities** | FF1 (NIST SP 800-38G) encryption over the correct radix and length per entity type; re-derive the checksum so the surrogate is *valid*, not merely well-shaped; enforce the Aadhaar reserved-range constraint |
+| **Responsibilities** | FF1 (NIST SP 800-38G) encryption over the correct radix and length per entity type; re-derive the checksum so the surrogate is *valid*, not merely well-shaped. Aadhaar reserved-range membership is **not** enforced — proven mathematically unsatisfiable for any stateless, deterministic, invertible construction (see `docs/DECISIONS.md`, 2026-07-20). |
 | **Inputs** | Entity value + type + session key |
 | **Outputs** | A surrogate in the same domain |
 | **Dependencies** | Key provider (injected), checksum module |
-| **Failure modes** | Domain mismatch (a span whose length the domain cannot represent) → typed `SurrogateDomainError`, never a silent pass-through. Reserved-range violation → a public repo shipping issuable national ID numbers, which is a legal problem, not a bug. |
+| **Failure modes** | Domain mismatch (a span whose length the domain cannot represent) → typed `SurrogateDomainError`, never a silent pass-through. Reserved-range membership is not checked at all (unsatisfiable, see above) — the residual is a disclosed property of the domain, not a runtime failure mode. |
 
 ### 9. Name Allocator + Session Map
 
@@ -639,7 +639,7 @@ Two additional constraints are enforced on top of the permutation:
 
 **Checksum preservation.** A raw FF1 output is 12 digits but almost certainly not Verhoeff-valid. An invalid-checksum surrogate is a tell — it announces "this is a fake" to anyone downstream and breaks any consumer that validates. The engine re-derives the check digit so the surrogate is *valid*, not merely well-shaped.
 
-**Reserved-range enforcement.** A Verhoeff-valid Aadhaar surrogate could collide with a **real, issuable** Aadhaar. That would be generating someone else's national ID. Surrogates are constrained to UIDAI's documented never-issued reserved space, verified before the generator is written — and this applies equally to benchmark data, which is published publicly.
+**Reserved-range membership — an unsatisfiable requirement, retired.** A Verhoeff-valid Aadhaar surrogate could in principle collide with a **real, issuable** Aadhaar. The obvious fix — constrain every surrogate to UIDAI's documented never-issued reserved space — turns out to be mathematically impossible: the issuable space is roughly 1000x larger than UIDAI's only documented reserved range (a `9999`-prefixed test-UID block), so no deterministic, stateless, invertible function can map the former into the latter (pigeonhole; see `docs/DECISIONS.md`, 2026-07-20). This is a permanent, disclosed residual, not a bug — the same class of honesty as the name-surrogate residual below. Benchmark data is unaffected: it only needs a handful of synthetic values, comfortably drawn from the same official `9999` block.
 
 ### Names — finite list + session map
 
@@ -836,7 +836,7 @@ flowchart TB
 | **Rehydration oracle** | Conservative matching only; no fuzzy expansion | Documented; the sharpest attack on this design |
 | Our logs leak | Structural PII-safe formatter + a test | — |
 | Adversarial obfuscation defeats Tier 1 | Adversarial suite, published including failures | **Several bypasses still work, and are named in the README** |
-| Surrogate collides with a real identity | Reserved-range enforcement for Aadhaar | Names are drawn from a plausible list; a surrogate name may coincidentally be a real person's name |
+| Surrogate collides with a real identity | None for Aadhaar (proven impossible, see DECISIONS.md); names drawn from a bounded, disclosed list | Aadhaar: a surrogate's shape may coincide with an issuable number pattern — measured residual, not detectable at runtime. Names: a surrogate name may coincidentally be a real person's name |
 | Concurrent map corruption | Per-session locking, collision check at allocation | — |
 | Secrets leak | `.env` only; never logged, never in error messages | Host compromise |
 
