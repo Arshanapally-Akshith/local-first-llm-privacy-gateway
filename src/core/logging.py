@@ -18,34 +18,9 @@ caller.
 
 import json
 import logging
-from typing import Final, Literal, TypedDict, get_args
+from typing import Final, TypedDict
 
-EntityType = Literal[
-    "AADHAAR",
-    "PAN",
-    "IFSC",
-    "UPI",
-    "VEHICLE_REG",
-    "CARD",
-    "EMAIL",
-    "PHONE",
-    "PERSON",
-    "ORG",
-    "ADDRESS",
-]
-"""Closed vocabulary of entity types this gateway ever detects. Fixed
-here as a Literal (not a bare str) so an invalid value fails validation
-in redact_safe() rather than silently being accepted — a caller cannot
-smuggle an arbitrary string, including a real detected value, through
-this field."""
-
-_ENTITY_TYPES: Final[frozenset[str]] = frozenset(get_args(EntityType))
-
-Tier = Literal[1, 2]
-"""Which detection tier resolved a span. Tier 1 = checksum/regex,
-deterministic. Tier 2 = GLiNER NER, best-effort."""
-
-_TIERS: Final[frozenset[int]] = frozenset(get_args(Tier))
+from src.core.types import ENTITY_TYPES, TIERS, EntityType, Tier
 
 _LOGGER_NAME: Final[str] = "gateway"
 
@@ -104,16 +79,14 @@ def redact_safe(
             substring — that is exceptional, not expected, and must
             raise rather than log something misleading.
     """
-    if entity_type not in _ENTITY_TYPES:
+    if entity_type not in ENTITY_TYPES:
         raise ValueError(
-            f"unknown entity_type {entity_type!r}; must be one of {sorted(_ENTITY_TYPES)}"
+            f"unknown entity_type {entity_type!r}; must be one of {sorted(ENTITY_TYPES)}"
         )
-    if tier not in _TIERS:
-        raise ValueError(f"unknown tier {tier!r}; must be one of {sorted(_TIERS)}")
+    if tier not in TIERS:
+        raise ValueError(f"unknown tier {tier!r}; must be one of {sorted(TIERS)}")
     if span_start < 0 or span_end < span_start:
-        raise ValueError(
-            f"invalid span ({span_start}, {span_end}) for entity_type={entity_type}"
-        )
+        raise ValueError(f"invalid span ({span_start}, {span_end}) for entity_type={entity_type}")
     return RedactedEntity(
         entity_type=entity_type,
         span_start=span_start,
