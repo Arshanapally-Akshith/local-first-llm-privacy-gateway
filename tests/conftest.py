@@ -19,6 +19,7 @@ to be a syntactically plausible URL so Settings() validates.
 import logging
 import os
 from collections.abc import Iterator
+from datetime import datetime, timedelta, timezone
 
 import pytest
 
@@ -66,3 +67,30 @@ def captured_records() -> Iterator[list[logging.LogRecord]]:
         yield handler.records
     finally:
         logger.removeHandler(handler)
+
+
+class FakeClock:
+    """Controllable `Clock` test double (`src/core/clock.py`) — time
+    only ever moves when `advance()` is called. This is what makes TTL
+    expiry testable deterministically, with no `sleep()` anywhere in
+    the suite.
+
+    Shared here, not duplicated per test module, since Phase 3's
+    session-store, rehydration, and integration tests all need the same
+    controllable clock (mirrors why `captured_records` above is shared
+    rather than redefined per file).
+    """
+
+    def __init__(self, start: datetime | None = None) -> None:
+        self._now = start if start is not None else datetime(2026, 1, 1, tzinfo=timezone.utc)
+
+    def now(self) -> datetime:
+        return self._now
+
+    def advance(self, delta: timedelta) -> None:
+        self._now += delta
+
+
+@pytest.fixture()
+def fake_clock() -> FakeClock:
+    return FakeClock()
