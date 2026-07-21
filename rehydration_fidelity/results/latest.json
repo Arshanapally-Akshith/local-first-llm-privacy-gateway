@@ -1,0 +1,41 @@
+{
+  "commit": "6796edcfcf6b53bcf1e549e85fa351b85d816f6c",
+  "sample_size": 8,
+  "categories": {
+    "exact": {
+      "hits": 8,
+      "total": 8,
+      "hit_rate": 1.0
+    },
+    "decorated": {
+      "hits": 8,
+      "total": 8,
+      "hit_rate": 1.0
+    },
+    "case_shifted": {
+      "hits": 0,
+      "total": 8,
+      "hit_rate": 0.0
+    },
+    "partial": {
+      "hits": 0,
+      "total": 8,
+      "hit_rate": 0.0
+    },
+    "abbreviated": {
+      "hits": 0,
+      "total": 8,
+      "hit_rate": 0.0
+    },
+    "transliterated": {
+      "hits": 0,
+      "total": 8,
+      "hit_rate": 0.0
+    },
+    "reasoned_about": {
+      "hits": 0,
+      "total": 8,
+      "hit_rate": 0.0
+    }
+  }
+}

@@ -19,7 +19,7 @@
 
 param(
     [Parameter(Position = 0)]
-    [ValidateSet("install", "run", "mock", "test", "lint", "typecheck", "check")]
+    [ValidateSet("install", "run", "mock", "test", "lint", "typecheck", "check", "rehydration-fidelity")]
     [string]$Task = "check"
 )
 
@@ -52,5 +52,13 @@ switch ($Task) {
         ruff check --line-length 100 .
         mypy --strict src
         pytest
+    }
+    "rehydration-fidelity" {
+        # Regenerates rehydration_fidelity/results/latest.json — BUILD.md,
+        # Phase 3: "Rehydration-fidelity harness runs and emits
+        # per-category numbers to an artifact." Measures, does not
+        # assert; re-run after committing code changes to re-stamp the
+        # artifact with the commit that actually produced its numbers.
+        python -m rehydration_fidelity.runner.run
     }
 }
