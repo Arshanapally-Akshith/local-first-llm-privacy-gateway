@@ -58,7 +58,7 @@ def _clear_overrides() -> Iterator[None]:
 
 def test_pan_and_aadhaar_in_a_tool_definition_never_reach_upstream_plaintext() -> None:
     capturing = _override_with_capturing_mock_upstream()
-    client = TestClient(app)
+    client = TestClient(app, headers={"X-Session-Id": "test-session-1"})
 
     response = client.post(
         "/v1/chat/completions",
@@ -103,7 +103,7 @@ def test_the_same_identifier_gets_the_same_surrogate_in_every_json_location() ->
     Surrogate Architecture) actually buys, proven end-to-end rather than
     only at the domain layer."""
     capturing = _override_with_capturing_mock_upstream()
-    client = TestClient(app)
+    client = TestClient(app, headers={"X-Session-Id": "test-session-1"})
 
     arguments = json.dumps({"note": f"Aadhaar on file: {_VALID_AADHAAR}"})
     response = client.post(
@@ -158,3 +158,52 @@ def test_the_same_identifier_gets_the_same_surrogate_in_every_json_location() ->
     assert len(message_surrogate) == len(_VALID_AADHAAR)
     assert message_surrogate != _VALID_AADHAAR
     assert _VALID_AADHAAR not in json.dumps(upstream_saw)
+
+
+def test_a_surrogate_replayed_in_a_later_request_on_the_same_session_is_not_re_encrypted() -> None:
+    """The Phase 3 Task 3 scenario BUILD.md names directly: a surrogate
+    minted on one turn, appearing again in a *later* request on the same
+    session (e.g. the client replaying a prior assistant message), must
+    pass through unchanged — never re-encrypted into a second, different
+    surrogate ("a surrogate-of-a-surrogate unwinds one layer and
+    corrupts silently")."""
+    capturing = _override_with_capturing_mock_upstream()
+    session_headers = {"X-Session-Id": "multi-turn-session"}
+    client = TestClient(app, headers=session_headers)
+
+    first = client.post(
+        "/v1/chat/completions",
+        json={
+            "model": "gpt-4",
+            "messages": [{"role": "user", "content": f"My Aadhaar is {_VALID_AADHAAR}"}],
+            "stream": False,
+        },
+    )
+    assert first.status_code == 200
+    first_upstream_saw = json.loads(capturing.captured_bodies[0])
+    surrogate = first_upstream_saw["messages"][0]["content"].removeprefix("My Aadhaar is ")
+    assert surrogate != _VALID_AADHAAR
+
+    second = client.post(
+        "/v1/chat/completions",
+        json={
+            "model": "gpt-4",
+            "messages": [
+                {"role": "user", "content": f"My Aadhaar is {_VALID_AADHAAR}"},
+                {"role": "assistant", "content": f"Noted: {surrogate}"},
+                {"role": "user", "content": "thanks"},
+            ],
+            "stream": False,
+        },
+    )
+    assert second.status_code == 200
+    second_upstream_saw = json.loads(capturing.captured_bodies[1])
+
+    # Turn 1's real value, replayed in turn 2's history, must still
+    # encrypt to the exact same surrogate (consistent by construction).
+    assert second_upstream_saw["messages"][0]["content"] == f"My Aadhaar is {surrogate}"
+    # The surrogate itself, appearing in turn 2's history, must be left
+    # exactly as-is — not detected as "a new real Aadhaar" and encrypted
+    # a second time into something else.
+    assert second_upstream_saw["messages"][1]["content"] == f"Noted: {surrogate}"
+    assert _VALID_AADHAAR not in json.dumps(second_upstream_saw)

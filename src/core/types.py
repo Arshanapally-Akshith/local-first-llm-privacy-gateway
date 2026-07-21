@@ -45,6 +45,14 @@ def new_correlation_id() -> CorrelationId:
     return CorrelationId(uuid.uuid4().hex)
 
 
+SessionId = NewType("SessionId", str)
+"""Opaque per-conversation identifier scoping the session map (Phase 3).
+Like `CorrelationId`, arbitrary-string and unvalidated by this type —
+unlike `CorrelationId`, it is supplied by the *caller* (an explicit
+required request header, per the Phase 3 architectural decision), not
+generated here. No `new_session_id()` helper exists for that reason:
+there is nothing for this module to generate."""
+
 Offset = NewType("Offset", int)
 """A character index into a text region — not a bare `int`. Substitution
 happens at exact offsets (CLAUDE.md: "Offsets are a type, not an int");
