@@ -21,10 +21,16 @@ from src.surrogate import ff1
 _TWEAK: Final[bytes] = b"PHONE"
 _CORE_LENGTH: Final[int] = 10
 _VALID_LEADING_DIGITS: Final[frozenset[str]] = frozenset("6789")
+_MAX_LENGTH: Final[int] = len("+91") + _CORE_LENGTH
 
 
 class PhoneDomain:
     entity_type: EntityType = "PHONE"
+    max_surrogate_length: int = _MAX_LENGTH
+    """13 characters — the `+91`-prefixed shape, the longest of the
+    four `_split_prefix()` accepts; the prefix is copied verbatim
+    (never permuted), so `encrypt()`/`decrypt()` always preserve
+    whichever shape the input already had."""
 
     def encrypt(self, value: str, key: bytes) -> str:
         prefix, core = _split_prefix(value)

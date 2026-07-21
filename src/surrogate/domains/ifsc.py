@@ -31,6 +31,8 @@ _RADIXES: Final[tuple[int, ...]] = (26,) * len(_BANK_CODE_POSITIONS) + (36,) * l
 
 class IfscDomain:
     entity_type: EntityType = "IFSC"
+    max_surrogate_length: int = _LENGTH
+    """Always exactly 11 characters — IFSC has no variable-length shape."""
 
     def encrypt(self, value: str, key: bytes) -> str:
         _validate(value)

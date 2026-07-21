@@ -32,6 +32,8 @@ _LENGTH: Final[int] = 12
 
 class AadhaarDomain:
     entity_type: EntityType = "AADHAAR"
+    max_surrogate_length: int = _LENGTH
+    """Always exactly 12 digits — Aadhaar has no variable-length shape."""
 
     def encrypt(self, value: str, key: bytes) -> str:
         payload = _validate_and_split(value)

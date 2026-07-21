@@ -51,3 +51,16 @@ def get_surrogate_domain(entity_type: EntityType) -> SurrogateDomain:
     if domain is None:
         raise SurrogateDomainError(f"no surrogate domain registered for entity_type={entity_type}")
     return domain
+
+
+def max_registered_surrogate_length() -> int:
+    """The longest surrogate any *currently registered* FF1 domain could
+    ever produce.
+
+    Used by `src/pipeline/rehydrate.py` to size the response-path
+    sliding window's lookahead margin (combined there with the longest
+    name-list candidate, for the Tier-2 name-map side) — see that
+    module's `REQUIRED_WINDOW_LOOKAHEAD` for why a value derived from
+    real domain data, not a guess, is what correctness here requires.
+    """
+    return max(domain.max_surrogate_length for domain in _DOMAINS.values())

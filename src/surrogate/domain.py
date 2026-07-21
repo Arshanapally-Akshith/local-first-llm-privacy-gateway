@@ -31,6 +31,24 @@ from src.core.types import EntityType
 class SurrogateDomain(Protocol):
     entity_type: EntityType
 
+    max_surrogate_length: int
+    """The longest string this domain's `encrypt()` can ever produce.
+
+    A fixed, cited property of the entity type's own regulatory format
+    (e.g. Aadhaar is always 12 digits; a payment card is 12-19 digits
+    per ISO/IEC 7812), not a measurement — each concrete domain states
+    where its value comes from in its own module. Phase 3's response-
+    path rehydration engine (`src/pipeline/rehydrate.py`) needs the
+    longest surrogate across *every* registered domain to size the
+    sliding window's lookahead margin correctly: too small, and a
+    surrogate can be split across two released chunks before the
+    engine ever sees it whole (BUILD.md, Phase 3: "Split-surrogate
+    rehydration passes across 1/2/3/N chunk splits"). Exposed here,
+    once, rather than duplicated as a second hand-copied constant
+    elsewhere (CLAUDE.md: "no duplicated logic") — see
+    `src/surrogate/registry.py::max_registered_surrogate_length()`.
+    """
+
     def encrypt(self, value: str, key: bytes) -> str:
         """Return a format-preserving surrogate for `value`.
 

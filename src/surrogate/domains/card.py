@@ -22,6 +22,11 @@ _MAX_LENGTH: Final[int] = 19
 
 class CardDomain:
     entity_type: EntityType = "CARD"
+    max_surrogate_length: int = _MAX_LENGTH
+    """19 digits — the longest card length this domain accepts
+    (ISO/IEC 7812-1 allows 12-19 digit PANs); `decrypt()` always
+    produces a surrogate the same length as its input, so this domain's
+    own upper bound is the true worst case, not an average."""
 
     def encrypt(self, value: str, key: bytes) -> str:
         payload = _validate_and_split(value)

@@ -34,10 +34,18 @@ _STATE_CODE_PATTERN: Final[re.Pattern[str]] = re.compile(
 _BH_SERIES_PATTERN: Final[re.Pattern[str]] = re.compile(
     r"^(?P<year>\d{2})BH(?P<number>\d{4})(?P<suffix>[A-Z]{1,2})$"
 )
+_MAX_LENGTH: Final[int] = 11
+"""The state-code scheme's own longest shape: 2 (state) + 2 (district,
+max) + 3 (series, max) + 4 (number) = 11. The BH-series scheme tops out
+at 10 (2 + len("BH") + 4 + 2 suffix, max) — shorter, so the state-code
+maximum is this domain's true worst case. `encrypt()`/`decrypt()` always
+preserve the input's own segment lengths (see `_parse()`), never
+lengthening it, so no shape produced here ever exceeds this bound."""
 
 
 class VehicleRegistrationDomain:
     entity_type: EntityType = "VEHICLE_REG"
+    max_surrogate_length: int = _MAX_LENGTH
 
     def encrypt(self, value: str, key: bytes) -> str:
         shape = _parse(value)

@@ -35,6 +35,8 @@ _RADIXES: Final[tuple[int, ...]] = (26,) * len(_FREE_LETTER_POSITIONS) + (10,) *
 
 class PanDomain:
     entity_type: EntityType = "PAN"
+    max_surrogate_length: int = _LENGTH
+    """Always exactly 10 characters — PAN has no variable-length shape."""
 
     def encrypt(self, value: str, key: bytes) -> str:
         _validate(value)
