@@ -11,7 +11,7 @@ from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse
 
 from src.core.config import get_settings
-from src.core.exceptions import UpstreamError
+from src.core.exceptions import SurrogateDomainError, UpstreamError
 from src.core.logging import configure_logging
 from src.proxy.routes import router as proxy_router
 
@@ -32,6 +32,24 @@ async def _handle_upstream_error(_request: Request, exc: UpstreamError) -> JSONR
     already worked out (ARCHITECTURE.md, Error Handling).
     """
     return JSONResponse(status_code=exc.status_code, content={"error": str(exc)})
+
+
+@app.exception_handler(SurrogateDomainError)
+async def _handle_surrogate_domain_error(
+    _request: Request, exc: SurrogateDomainError
+) -> JSONResponse:
+    """Turn a raised SurrogateDomainError into a 500.
+
+    ARCHITECTURE.md's Error Handling flowchart treats a surrogate
+    domain mismatch as its own fixed branch — always a 500, never a
+    pass-through, half-sanitised = leak. FastAPI's default handler for
+    an unregistered exception type would already produce a 500, but
+    not with this project's consistent JSON error shape; mirrors the
+    UpstreamError handler above. `str(exc)` is safe to return: every
+    SurrogateDomainError message states what failed and the expected
+    shape, never the real value (see the exception's own docstring).
+    """
+    return JSONResponse(status_code=500, content={"error": str(exc)})
 
 
 @app.get("/health")

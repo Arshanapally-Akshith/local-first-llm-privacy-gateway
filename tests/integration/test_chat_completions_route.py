@@ -195,3 +195,20 @@ def test_upstream_4xx_propagated_verbatim_non_streaming() -> None:
 
     assert response.status_code == 400
     assert response.json() == {"error": {"message": "bad request"}}
+
+
+@pytest.mark.parametrize("malformed_body", [[1, 2, 3], "just a string", 42])
+def test_non_object_json_body_returns_400_not_a_crash(malformed_body: object) -> None:
+    """Regression: sanitize() assumes a JSON-object body and previously
+    had no validation ahead of it. A syntactically valid but non-object
+    top-level body (array/string/number) parses fine via
+    `request.json()`, then reached `sanitize()` -> `field_walker.walk()`
+    -> (for a bare string) ran real detection/FF1 over it -> an
+    unchecked `assert isinstance(sanitized, dict)` -> an unhandled
+    AssertionError -> a generic 500, never reaching the upstream client
+    override below (proving it, not just asserting the status code)."""
+    client = TestClient(app)
+
+    response = client.post("/v1/chat/completions", json=malformed_body)
+
+    assert response.status_code == 400

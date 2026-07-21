@@ -4,7 +4,7 @@ Settings.fpe_key — never the raw secret itself."""
 from pydantic import SecretStr
 
 from src.core.config import Settings
-from src.surrogate.key_provider import SettingsKeyProvider
+from src.surrogate.key_provider import SettingsKeyProvider, get_key_provider
 
 
 def _settings(fpe_key: str) -> Settings:
@@ -41,3 +41,9 @@ def test_get_key_never_returns_the_raw_secret_bytes() -> None:
     provider = SettingsKeyProvider(_settings(raw))
 
     assert raw.encode("utf-8") != provider.get_key()
+
+
+def test_get_key_provider_returns_the_same_instance_across_calls() -> None:
+    """`@lru_cache`, mirroring `upstream_client.get_upstream_client()` —
+    one KeyProvider per process, not one per request."""
+    assert get_key_provider() is get_key_provider()

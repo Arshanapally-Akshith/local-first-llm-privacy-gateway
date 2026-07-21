@@ -17,6 +17,7 @@ able to depend on them without depending on the logging module.
 `logging.py` now imports them from here.
 """
 
+import uuid
 from dataclasses import dataclass
 from typing import Final, Literal, NewType, get_args
 
@@ -25,9 +26,24 @@ CorrelationId = NewType("CorrelationId", str)
 and threaded through every log line for that request (CLAUDE.md,
 Structured logging: "Every request carries a correlation id from
 ingress through rehydration"). Generation happens in the proxy route
-handler (Phase 1, Task 4); this type exists now because
-`fail_mode.resolve_failure()` already needs to accept one.
+handler, via `new_correlation_id()` below.
 """
+
+
+def new_correlation_id() -> CorrelationId:
+    """Generate a fresh, opaque correlation id.
+
+    The single place that ever calls `uuid.uuid4()` for this purpose —
+    every call site needing one (currently: the proxy route handler, at
+    ingress) calls this rather than generating one inline, so the
+    scheme has one owner and can change in one place later. The value
+    itself carries no meaning beyond uniqueness; nothing downstream
+    parses it (any string is a legitimate `CorrelationId`, per the type
+    above), so plain `uuid4` needs no injected RNG — unlike name
+    allocation or FF1 keys, no test needs this value to be
+    deterministic or reproducible."""
+    return CorrelationId(uuid.uuid4().hex)
+
 
 Offset = NewType("Offset", int)
 """A character index into a text region — not a bare `int`. Substitution

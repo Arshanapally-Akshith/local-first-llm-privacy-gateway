@@ -5,9 +5,10 @@ never reached for globally").
 """
 
 import hashlib
+from functools import lru_cache
 from typing import Protocol
 
-from src.core.config import Settings
+from src.core.config import Settings, get_settings
 
 
 class KeyProvider(Protocol):
@@ -37,3 +38,13 @@ class SettingsKeyProvider:
     def get_key(self) -> bytes:
         raw = self._settings.fpe_key.get_secret_value().encode("utf-8")
         return hashlib.sha256(raw).digest()
+
+
+@lru_cache
+def get_key_provider() -> KeyProvider:
+    """FastAPI dependency: one `KeyProvider` per process, mirroring
+    `upstream_client.get_upstream_client()`'s exact shape. Tests
+    override this via FastAPI's `dependency_overrides`, never by
+    patching this function's internals (CLAUDE.md's dependency-
+    injection rule)."""
+    return SettingsKeyProvider(get_settings())

@@ -1,27 +1,36 @@
 """The gateway's /v1/chat/completions route.
 
 Wires together the components earlier tasks built: SSEEventParser and
-chat_stream (Task 4) parse and re-serialize upstream SSE; SlidingWindow
-(Task 2) buffers response text. No detection, matching, or substitution
-— that is Phase 2+. This task only wires the transport pipeline
-together (BUILD.md, Phase 1: "Bytes in, bytes out, correctly").
+chat_stream (Phase 1) parse and re-serialize upstream SSE; SlidingWindow
+(Phase 1) buffers response text; `pipeline.sanitize` (Phase 2, Task 6)
+replaces every detected entity with its surrogate before the body ever
+reaches the upstream client. Response-path substitution (rehydration)
+is Phase 3 — this route only sanitizes the request path, per BUILD.md's
+Phase 2 scope ("REQUEST PATH ONLY").
 
 Upstream failures (connection errors, timeouts, malformed responses)
 raise UpstreamError with a fixed status-code mapping, per
 ARCHITECTURE.md's Error Handling flowchart — they are transport-layer
 failures, not privacy-policy decisions, so they are deliberately NOT
 routed through fail_mode.resolve_failure(), which exists for detector
-failures specifically (see docs/DECISIONS.md).
+failures specifically (see docs/DECISIONS.md). `sanitize()` can raise
+SurrogateDomainError (UPI/email, no registered domain yet); that is
+also not FAIL_MODE-gated — ARCHITECTURE.md's Error Handling flowchart
+treats a surrogate domain mismatch as its own fixed branch, always a
+500, never a pass-through, regardless of FAIL_MODE.
 """
 
 from collections.abc import AsyncIterator
 from contextlib import AbstractAsyncContextManager
 
 import httpx
-from fastapi import APIRouter, Depends, Request, Response
+from fastapi import APIRouter, Depends, HTTPException, Request, Response
 from fastapi.responses import StreamingResponse
 
 from src.core.exceptions import UpstreamError
+from src.core.types import new_correlation_id
+from src.pipeline.field_walker import JSONValue
+from src.pipeline.sanitize import sanitize
 from src.pipeline.sliding_window import SlidingWindow
 from src.proxy.chat_stream import (
     ContentDelta,
@@ -32,6 +41,7 @@ from src.proxy.chat_stream import (
 )
 from src.proxy.sse_framing import SSEEventParser
 from src.proxy.upstream_client import get_upstream_client
+from src.surrogate.key_provider import KeyProvider, get_key_provider
 
 router = APIRouter()
 
@@ -83,14 +93,26 @@ def _has_content_slot(delta: ContentDelta) -> bool:
 async def chat_completions(
     request: Request,
     client: httpx.AsyncClient = Depends(get_upstream_client),
+    key_provider: KeyProvider = Depends(get_key_provider),
 ) -> Response:
-    body = await request.json()
-    if not bool(body.get("stream", False)):
-        return await _forward_non_streaming(client, body)
-    return await _start_streaming(client, body)
+    parsed_body = await request.json()
+    if not isinstance(parsed_body, dict):
+        # ARCHITECTURE.md, Error Handling: "Malformed request -> 400 + typed
+        # error, no upstream call, no detection." A syntactically valid JSON
+        # array/string/number parses fine here but isn't a chat-completion
+        # body; sanitize() assumes a dict, and running detection/FF1 over a
+        # bare string body would be exactly the "detector sees an
+        # unvalidated request" case that section rules out.
+        raise HTTPException(status_code=400, detail="request body must be a JSON object")
+    body: dict[str, JSONValue] = parsed_body
+    correlation_id = new_correlation_id()
+    sanitized_body = sanitize(body, key_provider, correlation_id=correlation_id)
+    if not bool(sanitized_body.get("stream", False)):
+        return await _forward_non_streaming(client, sanitized_body)
+    return await _start_streaming(client, sanitized_body)
 
 
-async def _forward_non_streaming(client: httpx.AsyncClient, body: dict[str, object]) -> Response:
+async def _forward_non_streaming(client: httpx.AsyncClient, body: dict[str, JSONValue]) -> Response:
     try:
         upstream_response = await client.post(_CHAT_COMPLETIONS_PATH, json=body)
     except httpx.TimeoutException as exc:
@@ -104,7 +126,9 @@ async def _forward_non_streaming(client: httpx.AsyncClient, body: dict[str, obje
     )
 
 
-async def _start_streaming(client: httpx.AsyncClient, body: dict[str, object]) -> StreamingResponse:
+async def _start_streaming(
+    client: httpx.AsyncClient, body: dict[str, JSONValue]
+) -> StreamingResponse:
     """Open the upstream connection before returning a StreamingResponse.
 
     Connection failures and timeouts happen here, outside the response
