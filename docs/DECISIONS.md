@@ -351,3 +351,65 @@ entry immediately above (2026-07-20). That entry correctly identified
 cycle-walking's precondition failure; this entry establishes the
 requirement itself was unsatisfiable by any technique, closing the
 "still required" research item it left open.
+
+---
+
+## 2026-07-21 — Span precedence: Tier 1 always wins, same-tier ties by longest-match then registration order
+
+**Decision.** `src/detect/precedence.py`'s `resolve()` implements one
+deterministic rule for overlapping spans from different detectors,
+matching ARCHITECTURE.md's Span Precedence section exactly: Tier 1
+always wins over Tier 2 on any overlap ("deterministic evidence beats
+probabilistic evidence, always"); among spans of the same tier, the
+longest match wins; remaining ties are broken by detector registration
+order — the position of that detector's span sequence in
+`get_tier1_detectors()`'s output, threaded through `resolve()`'s
+`Sequence[Sequence[Span]]` argument shape rather than inferred from a
+flattened list. The winner of an overlap claims its entire conflict
+neighborhood — eliminating every span it directly or transitively
+overlaps — rather than maximizing the count of surviving spans.
+
+**Alternatives considered.**
+- Maximize surviving span coverage (keep two lower-priority spans A
+  and C if a higher-priority span B is eliminated and A/C don't
+  overlap each other): rejected. "Deterministic evidence beats
+  probabilistic evidence, always" is an unconditional priority rule,
+  not an optimization target — a resolver that kept more text covered
+  by second-guessing the priority order would reintroduce exactly the
+  judgment call precedence exists to remove. See
+  `test_chain_overlap_highest_priority_span_eliminates_both_neighbors`
+  and its converse in `tests/unit/test_precedence.py`.
+- Let a higher-confidence or longer Tier-2 span override a shorter
+  Tier-1 span: rejected. A checksum has no false-positive rate; a
+  model's confidence score is not comparable evidence. Reversing the
+  rule would let probabilistic evidence override arithmetic, which
+  ARCHITECTURE.md rules out explicitly ("A checksum-validated PAN
+  inside a GLiNER `ORG` span is a PAN").
+- Break same-tier ties by scan position in one flattened span list,
+  rather than by which detector's own sequence a span came from:
+  rejected. Flattening first would make "registration order" depend on
+  how a caller happened to concatenate detector outputs — an
+  unenforced calling convention a caller could silently violate.
+  Instead, `resolve()`'s signature takes one span sequence *per
+  detector*, so registration order is a property of the input's shape,
+  not caller discipline.
+- Treat abutting spans (`a.end == b.start`) as overlapping, to be
+  conservative: rejected. Half-open interval semantics (`a.start <
+  b.end and b.start < a.end`) match the convention `Span`'s own
+  offsets already use elsewhere in the codebase, and treating adjacency
+  as overlap would falsely eliminate two genuinely distinct,
+  back-to-back entities (e.g. two PANs directly separated by nothing)
+  for no correctness benefit.
+
+**Why.** Overlap resolution happens immediately before offset-based
+substitution — an incorrect resolution doesn't just mis-attribute an
+entity type, it corrupts the request body at the character level
+(CLAUDE.md: "Off-by-one on overlapping spans corrupts the JSON body").
+A rule with a judgment call anywhere in it (confidence weighting,
+coverage maximization) is a rule a reviewer has to re-derive by
+testing; a rule that is a strict, three-level priority tuple (`tier`,
+`-length`, `detector_index`), sorted once, is fully determined by its
+inputs and requires no runtime heuristics. Tested with a deliberate
+three-detector overlap (`tests/unit/test_precedence.py`) and exercised
+end-to-end through the full sanitize pipeline (Phase 2 Task 6,
+`tests/unit/test_cascade.py`, `tests/unit/test_sanitize.py`).
