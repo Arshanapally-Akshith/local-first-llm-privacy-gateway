@@ -44,16 +44,22 @@ of leaking the original value.
 
 ## UPI IDs and email addresses cannot be sanitized yet — they hard-fail instead
 
-**Phase 2. Resolved in Phase 3.**
+**Phase 2. Still open as of Phase 4.** (An earlier version of this
+entry said "Resolved in Phase 3" — that was wrong. The session-scoped
+map Phase 3 built, and Phase 4 Task 5 wired PERSON/ORG/ADDRESS into, was
+never extended to UPI or email. Corrected here, not silently.)
 
 `UpiDetector` and `EmailDetector` are registered and active — a UPI ID
 or email address in a request **is detected**. No surrogate domain is
-registered for either type yet (`src/surrogate/registry.py`): FF1
-doesn't fit an unbounded-length domain (NPCI allows a 2–256 character
-VPA local part; email has no length bound at all), and the
-session-scoped map that would handle them correctly doesn't exist
-until Phase 3. See `docs/DECISIONS.md`, 2026-07-20, "FF1 domain
-resolution."
+registered for either type in `src/surrogate/registry.py` (FF1 doesn't
+fit an unbounded-length domain: NPCI allows a 2–256 character VPA local
+part; email has no length bound at all), and neither is registered in
+`src/session/candidates.py` either (Phase 4 Task 5's name-map registry
+covers only `PERSON`/`ORG`/`ADDRESS` — the three types BUILD.md's Phase
+4 scope actually named). See `docs/DECISIONS.md`, 2026-07-20, "FF1
+domain resolution," for why UPI/email don't fit FF1, and 2026-07-21,
+"Phase 4 Task 5," for why the name-map registry wasn't widened to cover
+them too (out of BUILD.md's stated Phase 4 scope).
 
 Detecting one today raises `SurrogateDomainError`, which the gateway
 turns into a `500` **before any upstream call is made**
@@ -61,7 +67,8 @@ turns into a `500` **before any upstream call is made**
 calls `field_walker.rebuild()` until every region has succeeded). This
 is a hard-fail, not a silent leak — the request is refused rather than
 partially sanitized — but it does mean **a request containing a UPI ID
-or email address cannot be sanitized and forwarded at all in Phase 2.**
+or email address cannot be sanitized and forwarded at all, in any phase
+through Phase 4.**
 
 ---
 
@@ -83,16 +90,26 @@ attempt to close this gap.
 
 ---
 
-## No unstructured-entity detection yet (names, organizations, addresses)
+## No unstructured-entity detection yet (names, organizations, addresses) — resolved
 
-**Phase 2. Tier 2 is Phase 4.**
+**Phase 2 (gap opened). Resolved in Phase 4.**
 
-Only the 8 structured Tier-1 entity types are detected. A person's
-name, an organization, or a street address in free text is not
-detected or sanitized at all — Tier 2 (GLiNER-class NER) doesn't exist
-until Phase 4. Any PII that isn't Aadhaar, PAN, IFSC, UPI, Vehicle
-Registration, Card, Email, or Phone currently passes through the
-gateway completely unsanitized.
+Tier 2 (`urchade/gliner_multi_pii-v1`, CPU) now detects `PERSON`,
+`ORG`, and `ADDRESS` in free text, wired into the same cascade as Tier
+1 (Tier 1 wins any overlap, per the Phase 2 precedence rule — Phase 4
+Task 3), gated by `FAIL_MODE` (Task 4), and sanitized via a
+production-sized session-map candidate pool for all three types (Task
+5) — see `docs/PHASE_4_SUMMARY.md` and `docs/DECISIONS.md` for full
+detail. Proven end-to-end, including a genuinely Hinglish/code-switched
+sentence, by
+`tests/integration/test_phase_4_gate.py::test_phase_4_gate_hinglish_name_org_address_and_pan`.
+
+**Residual, carried forward, not closed by this phase:** GLiNER's own
+measured weakness on Hinglish carrier sentences and literal multi-line
+addresses (see `docs/DECISIONS.md`, Phase 4 Task 2's three-round
+evaluation) — a *quality* residual within Tier 2, not an absence of
+Tier 2 detection itself. Rigorous, dataset-scale measurement of exactly
+how much is Phase 5's job (the benchmark), not this phase's.
 
 ---
 

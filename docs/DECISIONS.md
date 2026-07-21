@@ -1312,3 +1312,663 @@ Owning this limit is the second-most-honest thing in the project,
 after the adversarial suite." Phase 3 Tasks 4 and 5 are what make that
 sentence, written before either task existed, actually true rather than
 aspirational.
+
+---
+
+## 2026-07-21 - Tier 2 seam: one parameterized Tier2Detector, not three classes or a second interface; Tier2Model is request-stateless with no cache
+
+**Decision.** Phase 4 Task 1 adds `src/detect/tier2/model.py`
+(`Tier2Model` Protocol, `ModelEntityMatch`) and
+`src/detect/tier2/detector.py` (`Tier2Detector`), plus
+`registry.get_tier2_detectors(model) -> Sequence[Detector]`. `Detector`
+itself is unchanged. `PersonDetector`/`ORG`/`ADDRESS` (BUILD.md's own
+naming) are three *instances* of one `Tier2Detector` class,
+parameterized by `entity_type`, all sharing one injected `Tier2Model`
+reference — not three separate class definitions, and not a second,
+Tier-2-specific detector interface running alongside `Detector`.
+`Tier2Model.find_entities(text)` returns every match across all types
+in one call, undifferentiated; each `Tier2Detector` instance filters to
+its own type. No caching or call-batching exists anywhere in this
+seam: three detectors each independently call the shared model once
+per text region, and nothing remembers a result between calls.
+
+**Why one parameterized class, not three (`PersonDetector`,
+`OrgDetector`, `AddressDetector` as separate definitions).** Reviewed
+and changed during Phase 4 planning, before this task began: an
+earlier draft of this plan considered a distinct `MultiTypeDetector`
+interface for Tier 2 (Option B, below); the reviewer's explicit
+instruction was to preserve the existing `Detector` abstraction and
+avoid "two parallel detector ecosystems." Three separate class bodies
+whose only real content is a single constant (`entity_type`) is exactly
+the repetition CLAUDE.md's own refactor threshold names ("twice is a
+coincidence, three times is a refactor") — one class, three
+registrations, is the version of "detector-oriented" that doesn't
+duplicate that constant three times.
+
+**Alternatives considered (from the planning review).**
+- A distinct `MultiTypeDetector` interface, called directly by
+  `cascade.py` alongside the `Detector` registry rather than forced
+  through the single-type `Detector` Protocol: rejected on explicit
+  instruction — introduces a second detector-shaped abstraction
+  `cascade.py` and any future contributor would need to understand,
+  for a problem (one model, three types) that a shared internal
+  reference already solves without touching the outward interface at
+  all.
+- Three separate `PersonDetector`/`OrgDetector`/`AddressDetector`
+  class definitions, each independently calling a shared model
+  reference: considered and rejected in favour of one parameterized
+  class — functionally equivalent from `cascade.py`'s point of view,
+  but three class bodies for one real difference (a constant) is
+  duplicated logic without a duplicated *reason* to duplicate it.
+- Caching/batching the shared model's per-text result across the three
+  detectors' independent calls (so identical text isn't re-processed
+  three times): explicitly not built now. CLAUDE.md's own performance
+  rule applies directly ("no optimization without a before-number") —
+  no real model exists yet to measure the actual cost of three calls
+  against, so there is nothing yet to optimise. Deferred to Phase 4
+  Task 2, to be revisited only if a real measurement shows a genuine
+  cost.
+
+**`Tier2Model` must be request-stateless — an explicit architectural
+constraint, not a style note.** Per direct instruction during plan
+review: `find_entities(text)` must not retain `text`, any derived
+value, or any per-call state beyond the call's own execution. If a
+future optimisation (the caching considered and deferred above)
+introduces memoisation, it must either be scoped to one request's own
+lifetime, or be demonstrably thread-safe with a bounded, explicitly-
+reviewed retention policy — never a silently-added, long-lived cache
+holding request text. Written directly into `Tier2Model`'s own
+docstring so the constraint travels with the seam, not just this entry.
+
+**`DetectionError` (`src/core/exceptions.py`): a new, immediate-caller
+exception, not a speculative addition.** `Tier2Detector.detect()` is
+the first place in this codebase that must validate offsets against a
+text's actual length before trusting them: Tier-1 detectors' offsets
+come from Python's own regex engine over the same string and are
+always valid by construction; a model's offsets carry no such
+guarantee. `Span.__post_init__` already rejects `start >= end` or
+`start < 0`, but has no way to check `end <= len(text)` since a bare
+`Span` never sees the source text — `DetectionError` closes that gap
+at the one place text and offsets are both in scope together, named in
+CLAUDE.md's own exception hierarchy in advance, given its first real
+caller here rather than added ahead of need.
+
+**Known open item, deliberately not resolved in this task.** If a real
+model ever returns two *overlapping* matches of the *same* entity type
+in one `find_entities()` call, `Tier2Detector.detect()` currently
+returns both, unfiltered — `precedence.resolve()`'s documented
+precondition (no overlap within one detector's own output) would then
+not hold for that detector's contribution. Whether this is a real
+behaviour any actual model exhibits is unknown without one to observe
+(Phase 4 Task 2 hasn't chosen one yet); resolving it against a fake
+model that can only behave however a test tells it to would be solving
+an imagined problem, not an observed one. Carried forward explicitly to
+Phase 4 Task 3 (cascade wiring), where real model output will actually
+be available to check this against — not silently ignored, and not
+pre-emptively "fixed" against a guess.
+
+**Why.** BUILD.md, Phase 4: "Wire into the cascade behind Tier 1" and
+"no fine-tuning in this phase" both presuppose a detector seam exists
+to wire *into* — this task builds exactly that seam, fully tested
+(`tests/unit/test_tier2_detector.py`) against a fake model, with zero
+dependency on which real model Task 2 eventually chooses.
+
+---
+
+## 2026-07-21 - Tier 2 model selection: gliner_multi_pii-v1, chosen by measurement across two rounds of evaluation, with a real end-to-end RAM finding disclosed rather than assumed away
+
+**Decision.** Phase 4 Task 2 integrates `urchade/gliner_multi_pii-v1`
+as the real `Tier2Model` (`src/detect/tier2/gliner_model.py`), behind
+Task 1's seam without any change to `Tier2Detector`, `registry.py`, or
+`cascade.py`. Chosen over `gliner_small-v2.1`, `gliner_medium-v2.1`,
+and `gliner_large-v2.1` after two separate, increasingly rigorous
+rounds of measurement, not intuition — first a single-sentence,
+five-way comparison across model sizes; then a focused, 27-sentence
+synthetic corpus (slot-and-inject, gold offsets exact by construction)
+comparing only the two strongest candidates head to head; then a
+final, real end-to-end process-memory measurement of the actual
+gateway running under `uvicorn`, not the model in isolation.
+
+**Round 1 (five candidates, one sentence each), summary.** Measured
+RAM, cold-start load time, and warm inference latency for
+`gliner_small-v2.1`, `gliner_medium-v2.1`, `gliner_large-v2.1`, and
+`gliner_multi_pii-v1` in an isolated scratch venv (outside the repo).
+`gliner_large-v2.1` was ruled out outright: slowest (940ms-1.9s warm
+latency, itself showing large run-to-run variance), heaviest to
+materialize (its weights load lazily at first inference, not at
+`from_pretrained()`, understating its RAM cost until measured *after*
+inference), and — the deciding factor — *not* measurably better at
+ADDRESS extraction than the smaller checkpoints on the one test
+sentence tried. `gliner_multi_pii-v1` stood out for the opposite
+reason: the only candidate that captured a full, multi-component
+address ("14 MG Road, Bengaluru, Karnataka") as one span, at
+medium-like latency (~200ms), though with the heaviest isolated RAM
+footprint (~1.7GB).
+
+**Round 2 (27-sentence synthetic corpus, `gliner_small-v2.1` vs.
+`gliner_multi_pii-v1` only), summary.** Built to cover English,
+Hinglish, Indian naming conventions (honorifics, initials,
+patronymic-style), literal multi-line addresses, and abbreviation/
+punctuation variation — 38 gold entities (15 PERSON, 12 ORG, 11
+ADDRESS), gold offsets computed by construction (piece-by-piece
+concatenation), never hand-counted. Exact-span match was fixed as the
+primary criterion before running, with overlap-match reported
+alongside for transparency (ARCHITECTURE.md's own "the matching
+criterion changes recall by 10+ points" caveat, taken seriously here
+too). Result, broken down by type - the number that actually mattered:
+
+| Type | `gliner_small-v2.1` exact | `gliner_multi_pii-v1` exact |
+|---|---|---|
+| PERSON | 15/15 (100%) | 15/15 (100%) — identical |
+| ORG | 9/12 (75%) | 11/12 (92%) |
+| ADDRESS | **0/11 (0%)** | **5/11 (45%)** |
+
+`gliner_small-v2.1` never once produced an exact match on a
+multi-component address in this corpus — it reliably fragments them
+("14 MG Road, Bengaluru, Karnataka 560001" comes back as three separate
+spans) and drops trailing periods on org abbreviations. Aggregate exact
+precision more than doubled (0.369 -> 0.775) and exact recall improved
+materially (0.632 -> 0.816) for `multi_pii`, entirely because of this
+concentrated ADDRESS/ORG gap — PERSON detection was already identical
+between the two. `multi_pii`'s own honestly-disclosed residual: it
+missed addresses embedded in Hinglish carrier sentences and all three
+literal multi-line addresses in the corpus more often than `small` did
+under overlap-matching — a real, measured weakness, not hidden.
+Isolated-process cost of the improvement: +78ms warm latency (93ms ->
+171ms), +491.7MB peak RSS (1186.7MB -> 1678.4MB).
+
+**Round 3 (real end-to-end gateway process memory), summary — the
+measurement that actually decided this.** Both rounds above measured
+the model *in isolation* (a bare Python process running just
+`torch`+`gliner`, no FastAPI/uvicorn/httpx overhead). Per direct
+instruction, before Task 2 could be considered complete, the *real*
+gateway (`uvicorn app.main:app`, full startup, real warmup) was
+measured end-to-end for both candidates via Windows' own
+`Get-Process -Id <pid>` (`WorkingSet64`, `PeakWorkingSet64`), not a
+script-reported number:
+
+| | `gliner_small-v2.1` (real gateway) | `gliner_multi_pii-v1` (real gateway) |
+|---|---|---|
+| Current (settled) WorkingSet | 1279.8 MB | 1533.3 MB |
+| **Peak WorkingSet** (transient, during startup) | 1638.2 MB | 2216.3 MB |
+| Private (committed) memory | 1597.0 MB | 2459.3 MB |
+| Startup warmup latency (this run) | 15.5 s | 24.1 s |
+
+Two things this round revealed that the isolated measurements alone
+could not: first, the *full gateway's* peak RAM (2216.3MB for
+`multi_pii`) is meaningfully higher than the *model alone's* isolated
+peak (1678.4MB) — FastAPI/uvicorn/pydantic/httpx overhead is not
+negligible on top of the model. Second, and more importantly: the
+**peak** figure is a one-time transient during model loading/warmup,
+not the sustained cost — the process's *current* (settled) WorkingSet
+after warmup completes is 1533.3MB, only ~253MB above `small`'s own
+1279.8MB. The steady-state delta (what matters while the gateway is
+actually serving requests) is modest; the transient startup-only delta
+(~578MB peak-to-peak) is the larger, real cost.
+
+**System-context finding, disclosed rather than smoothed over.**
+Measured on the actual target machine (7.68GB total RAM, matching
+BUILD.md's stated dev environment), with a realistic *concurrent*
+session state — VS Code, a browser, Windows Defender, and this
+assistant's own CLI all running, exactly the "one developer's machine"
+BUILD.md describes, not an idle/pristine box — only **0.91GB was free**
+system-wide while the smaller model's gateway was running. Under this
+real, measured condition, either candidate's startup transient is
+genuinely tight against available headroom; `gliner_small`'s own peak
+(1638.2MB) is already large relative to 0.91GB free. This is a property
+of running any current CPU NER model in this build alongside a full
+development session on a 7.68GB machine, not something uniquely
+disqualifying about `multi_pii` specifically.
+
+**Alternatives considered at this final gate.**
+- Revert to `gliner_small-v2.1` given the tight measured headroom:
+  rejected. The concerning number (the transient startup peak) is
+  large but one-time and does not recur while serving traffic; the
+  number that matters for sustained operation (steady-state RSS) shows
+  only a ~253MB difference between the two candidates. Reverting over
+  a one-time, ~15-25-second startup spike would discard a measured,
+  concentrated, and substantial ADDRESS/ORG recall improvement
+  (Round 2) for a cost that is real but smaller than the isolated
+  numbers alone suggested.
+- Treat the low system-wide free-RAM reading as disqualifying on its
+  own: rejected — it reflects this measurement session's own crowded
+  state (IDE, browser, this assistant) more than a property of the
+  model choice; both candidates are tight under it, and `small` is not
+  meaningfully safer by this measure than `multi_pii` is unsafe.
+- Hide or soften the RAM finding to avoid relitigating an already-
+  approved model choice: rejected outright — CLAUDE.md's "honest
+  measurement over favourable measurement" applies with equal force to
+  this project's own tooling choices, not only to the benchmark and
+  adversarial suite the phrase was originally written for.
+
+**Why.** BUILD.md, Phase 4: "Runs on CPU within my RAM budget —
+measured, not assumed." All three rounds above exist because "probably
+fine" was never an acceptable basis for this decision — and the third
+round specifically exists because the first two, while real
+measurements, were not yet the *right* measurement (the model alone,
+not the system that actually ships). Recorded here in full, including
+the uncomfortable transient-peak number and the crowded-machine
+context, per the same discipline this project applies to its own
+detector's residual weaknesses.
+
+**Supporting artifacts (not committed — produced in an isolated scratch
+venv outside the repository, per instruction not to modify the
+repository during evaluation):** the 27-sentence corpus and evaluation
+scripts, and the raw JSON results from all three measurement rounds.
+
+---
+
+## 2026-07-21 - Tier 2 wired into the cascade: detection only, name-surrogate allocation stays out of scope until Task 5
+
+**Decision.** Phase 4 Task 3 makes `src/detect/cascade.py::detect()`
+take a required `tier2_model: Tier2Model` parameter and run
+`get_tier2_detectors(tier2_model)` alongside `get_tier1_detectors()`,
+feeding both into the same, unmodified `precedence.resolve()` call
+(Tier-1 detectors' sequences first, Tier-2's second — this only affects
+the same-tier tie-break among PERSON/ORG/ADDRESS, never a cross-tier
+outcome, since tier rank alone already decides those). `tier2_model` is
+threaded down through `sanitize()`/`_sanitize_region()` exactly like
+`key_provider`/`clock` already are, and `routes.py::chat_completions()`
+supplies it via `Depends(get_tier2_model)` — the same `@lru_cache`d
+singleton `app/main.py`'s startup warmup already constructs, not a
+fresh construction per request. No change to `precedence.py` itself:
+tracing the algorithm showed its documented "no overlap within one
+detector's own output" precondition is not actually load-bearing for
+correctness — it eliminates overlaps from a flat
+`(span, detector_index)` list regardless of whether both spans came
+from the same detector — so Task 1's "known open item" in
+`Tier2Detector`'s own docstring (a model returning two overlapping
+same-type matches) is closed by a test
+(`test_same_type_tier2_overlap_resolves_to_the_longest_span`), not a
+code change.
+
+**Scope boundary, decided explicitly, not discovered by accident.**
+This task does **not** wire real detected `PERSON`/`ORG`/`ADDRESS`
+spans to `Session.allocate_or_lookup_name()` — that remains Phase 4
+Task 5's scope (see `docs/PHASE_4_SUMMARY.md`'s own "known limitations"
+list, written before this task began: "Phase 4 Task 5 replaces
+[the placeholder name list] with a production-sized, synthetic list
+before real name allocation is wired to detected PERSON spans"). The
+consequence, surfaced to the product owner before implementing rather
+than discovered afterward (CLAUDE.md, Decision Making: "do not resolve
+it by implementing"): once Tier 2 is live in the cascade, **any request
+containing a detectable name, organisation, or address now raises
+`SurrogateDomainError`** via `sanitize()` — `src/surrogate/registry.py`
+has no FF1 domain for those three types, exactly as it already has none
+for UPI/email. `app/main.py`'s existing `SurrogateDomainError` handler
+turns this into a clean, documented 500, not a crash and not a silent
+pass-through of the real value — the same failure shape UPI/email
+requests already produce today, extended to three more types until
+Task 5 lands.
+
+**Alternatives considered.**
+- Pull part of Task 5 forward: also wire `sanitize()` to call
+  `Session.allocate_or_lookup_name()` for Tier-2 spans now, using the
+  existing Phase-3 *placeholder* 40-name list, so name-bearing requests
+  succeed end-to-end sooner. Presented to the product owner as a real
+  option, not assumed — rejected in favour of the detection-only scope:
+  it would mean shipping name substitution against a list explicitly
+  documented as "nowhere near enough for real Tier-2 traffic"
+  (`src/session/names.py`), blurring which task actually delivered
+  production-ready name allocation, and mixing a Task 3 concern
+  (detection wiring) with a Task 5 concern (surrogate allocation) in
+  one change.
+- Silently swallow `SurrogateDomainError` for Tier-2 types specifically
+  and pass the real value through unsanitised until Task 5: rejected
+  outright — this is exactly the "half-sanitized request is a leak"
+  case CLAUDE.md's Error Handling section rules out; crashing loudly is
+  strictly better, and is already this project's established behaviour
+  for UPI/email.
+- Gate Tier-2 detection itself behind a settings flag so it can be
+  "turned on" only once Task 5 lands: rejected — an inactive
+  feature flag with no current caller is exactly the kind of
+  speculative, ahead-of-need addition CLAUDE.md's exception-hierarchy
+  rule (and this project's general anti-scope-creep posture) argues
+  against elsewhere; the existing `SurrogateDomainError` failure path
+  already provides a correct, loud, non-leaking behaviour with no new
+  configuration surface.
+
+**Test-suite side effect, found and fixed in this same task.** Adding
+`Depends(get_tier2_model)` to the real route meant every existing
+integration test that POSTs to `/v1/chat/completions` through the real
+`app` without overriding it (`test_chat_completions_route.py`,
+`test_sanitize_integration.py`, `test_rehydrate_integration.py`,
+`test_phase_3_gate.py`, `test_openai_sdk_compatibility.py` — none of
+them `real_model`-marked or Tier-2-related) would have started loading
+the real, multi-second, ~1.5GB+ GLiNER model on first request,
+defeating `pytest.ini`'s entire `-m "not real_model"` split. Fixed with
+one shared, autouse fixture in `tests/conftest.py`
+(`_no_real_tier2_model_over_http`) overriding
+`app.dependency_overrides[get_tier2_model]` with a zero-cost fake for
+every test, mirroring how `get_upstream_client` is already overridden
+per-file — centralised here instead, since this override is correct
+for the entire suite, not specific to any one test module.
+`tests/integration/test_tier2_real_model.py` is unaffected: it
+constructs `GLiNERTier2Model`/calls `get_tier2_model()` directly,
+bypassing FastAPI's dependency system entirely, so the override never
+shadows it.
+
+**Why.** BUILD.md, Phase 4: "Wire into the cascade behind Tier 1. Tier
+1 wins on overlap per the Phase-2 precedence rule" and "Cascade
+precedence tested: a PAN inside a span Tier 2 calls ORG resolves per
+the documented rule" are both proven directly —
+`tests/unit/test_cascade.py::test_tier1_wins_over_an_overlapping_tier2_span_the_build_md_gate_scenario`
+against a fake model (deterministic, fast) and
+`tests/integration/test_tier2_real_model.py::test_cascade_resolves_a_real_tier1_tier2_overlap_tier1_wins`
+against the real one (slow, `real_model`-marked, written to hold
+regardless of GLiNER's actual labelling choice on the test sentence).
+Tier-hit instrumentation (the DoD's third bullet) needed no new code:
+`sanitize.py`'s existing `log_event("pipeline.span_sanitized", ...,
+tier=span.tier, ...)` already logs which tier resolved a span, for any
+tier value, and now genuinely observes `tier=2` for the first time.
+
+---
+
+## 2026-07-21 - FAIL_MODE gates the Tier-2 stage: caught inside cascade.detect(), broadly by type but narrowly by scope
+
+**Decision.** Phase 4 Task 4 wraps only the Tier-2 detection step
+inside `src/detect/cascade.py::detect()` —
+`[detector.detect(text) for detector in get_tier2_detectors(tier2_model)]`
+— in a `try`/`except Exception`, handing any failure to
+`src/core/fail_mode.py::resolve_failure()`. Tier-1 detection,
+`precedence.resolve()`, and ingress recognition are not wrapped at all
+— they have no failure mode to guard (`re.finditer` over a `str` cannot
+raise for any input). `detect()` gains two new required parameters,
+`fail_mode: FailMode` and `correlation_id: CorrelationId` (the latter
+because `resolve_failure()` needs one to log against), threaded down
+from `routes.py` through `sanitize()`/`_sanitize_region()` exactly like
+`tier2_model` already is. `get_fail_mode()` (new, in `fail_mode.py`) is
+a thin `get_settings().fail_mode` factory, injected in `routes.py` via
+`Depends(get_fail_mode)` — mirroring `get_key_provider()`'s/
+`get_session_store()`'s own shape, not a new pattern. `app/main.py`
+gains a `FailClosedError` → 503 handler, fulfilling the mapping
+`fail_mode.py`'s own docstring already named in advance ("The proxy
+layer, not this module, maps this to a 503").
+
+**On `open`:** `resolve_failure()` logs a WARNING
+(`detection.tier2_failed`) and returns; `detect()` then treats Tier-2 as
+having contributed zero spans for that text region — Tier-1's own spans
+(already computed *before* Tier-2 was attempted) are entirely
+unaffected, since they're collected into a separate list before the
+Tier-2 `try` block ever runs.
+
+**On `closed`:** `resolve_failure()` raises `FailClosedError`, chained
+from the original cause, aborting `detect()` (and therefore
+`sanitize()`, and therefore the whole request) before any Tier-1
+substitution is lost — `sanitize()`'s no-partial-body invariant already
+guaranteed this for `SurrogateDomainError`; this is the same guarantee,
+now proven for a Tier-2 failure too
+(`tests/unit/test_sanitize.py::test_tier2_failure_with_fail_mode_closed_raises_fail_closed_error_and_body_untouched`).
+
+**Why `except Exception`, not a named type — the one deliberate
+exception to "catch the narrowest type you can name."** Two distinct
+failure shapes are gated identically here: `DetectionError` (this
+codebase's own typed exception, raised by `Tier2Detector.detect()` for
+a bad model offset) and an arbitrary exception from the model call
+itself (`Tier2Model.find_entities()` — the "model unavailable" case
+ARCHITECTURE.md names separately). The second cannot be named
+specifically the way `upstream_client.py` names `httpx.TimeoutException`/
+`httpx.ConnectError`: httpx is a well-typed library with a documented
+exception hierarchy for exactly this boundary; a CPU NER model
+(`gliner`/`torch`) has no equivalent contract this codebase can cite,
+and enumerating "every exception type gliner or torch might raise" is
+both incomplete today and liable to silently stop matching after a
+dependency upgrade. The catch is kept narrow in the one dimension that
+is actually controllable: *scope*. Only the single `get_tier2_detectors()`
+call is wrapped — not Tier-1 detection, not precedence resolution, not
+ingress recognition, not any other line in the function — so a bug
+anywhere else in `detect()` still propagates unguarded, exactly as
+CLAUDE.md's error-handling philosophy requires. This is never a silent
+swallow either way: `resolve_failure()` always either logs at WARNING
+(`open`) or raises loudly (`closed`) — there is no path where the
+caught exception simply vanishes.
+
+**Alternatives considered.**
+- Catch only `DetectionError`, leave a raw model exception unguarded:
+  rejected — ARCHITECTURE.md names "model unavailable" as its own
+  failure mode requiring `FAIL_MODE`, distinct from a bad-offset
+  `DetectionError`; leaving it unguarded would mean the one failure
+  mode BUILD.md's Task 4 description opens with ("model unavailable, or
+  a `DetectionError`...") is the one left unhandled.
+- Gate the whole `detect()` call (Tier 1 included), on the theory that
+  "the detection stage" is one unit: rejected — Tier 1 has no failure
+  mode to guard, so wrapping it would either never trigger (dead code
+  the tests can't meaningfully exercise) or mask a real Tier-1 bug
+  (e.g. a checksum module regression) behind `FAIL_MODE=open`'s
+  swallow-and-continue path, which is a correctness regression wearing
+  a resilience costume.
+- Push the try/except one layer up, into `sanitize.py`, wrapping the
+  call to `cascade.detect()` itself: rejected — `fail_mode.py`'s own
+  Phase 1 docstring already anticipated this exact call site
+  ("the real call site lives *below* pipeline... a detector-level
+  concern"), and catching at `sanitize.py` would mean a Tier-1-only
+  bug raised from inside `detect()` (there is none today, but nothing
+  stops one existing later) gets caught by the same broad handler
+  meant only for Tier-2 - conflating two different guarantees behind
+  one catch site.
+
+**Why.** BUILD.md, Phase 4 Task 4 (this document's own prior entry's
+"what's next"): "consume `FAIL_MODE` for a Tier-2 detection failure
+(model unavailable, or a `DetectionError` from an out-of-bounds model
+offset) — currently both propagate unhandled past `sanitize()`."
+Both are now proven gated, at the cascade level
+(`tests/unit/test_cascade.py`, four tests spanning both failure shapes
+and both `FAIL_MODE` values), the sanitize level
+(`tests/unit/test_sanitize.py`, two tests), and the real HTTP route
+(`tests/integration/test_chat_completions_route.py`, two tests proving
+the actual 503/200 status codes a caller would see).
+
+---
+
+## 2026-07-21 - Phase 4 Task 5: all three Tier-2 types get name-map surrogates, via generated (not hand-typed) candidate pools
+
+**Decision.** Task 5's scope, decided explicitly before implementing
+(the product owner's call, not this document's to make alone): all
+three Tier-2 entity types — `PERSON`, `ORG`, `ADDRESS` — are wired to
+`Session.allocate_or_lookup_name()`, not `PERSON` alone. This closes
+Task 3's disclosed `SurrogateDomainError` gap for all three, fully
+satisfying BUILD.md's Phase 4 gate text ("a name, an org, an address,
+and a PAN... surrogates consistent across turns") rather than leaving
+two of the three types permanently unsanitizable.
+
+Three new candidate-pool modules replace Phase 3's 40-entry `PERSON`
+placeholder: `src/session/names.py` (`PERSON`, expanded), `org_names.py`
+(`ORG`, new), `addresses.py` (`ADDRESS`, new). Each is generated from
+two small seed pools combined by cartesian product (~70 x ~70 ≈
+4,900-5,100 candidates each) rather than hand-typed — the same
+"programmatic generation over manual authoring" methodology BUILD.md's
+benchmark section already mandates ("slot carriers... entities injected
+programmatically"), applied here to a candidate *pool* instead of a
+labeled dataset. `src/session/candidates.py` is a new registry —
+`NAME_MAP_ENTITY_TYPES` (the shared source of truth for "which entity
+types use the map", replacing a set `rehydrate.py` used to hardcode on
+its own) and `get_candidates(entity_type)` (mirrors
+`src/surrogate/registry.py::get_surrogate_domain()`'s shape for the FF1
+side). `src/session/rng.py` adds `get_rng()`, injected into
+`sanitize()`/`routes.py` for `allocate_or_lookup_name()`'s required
+`rng` parameter.
+
+**Why generated pools, not real company/street names.** `org_names.py`'s
+root-word pool deliberately excludes real, identifiable companies (no
+"Tata", "Infosys", "Reliance", etc.) — a surrogate that *is* a specific
+real company is a materially worse residual than a low-probability
+shape coincidence (unlike Aadhaar's reserved-range residual, this would
+be a guaranteed, obvious collision with one particular real entity, not
+a statistical one). `addresses.py`'s street-name pool uses generic
+patterns reused across hundreds of real Indian cities (`Gandhi Road`,
+`Station Road`, figure-named roads) rather than a single uniquely
+identifying real street, for the same reason. City/state names in
+`addresses.py` are necessarily real (a fixed, public set) — no
+different from a benchmark carrier sentence naming a real city.
+
+**Why a fresh `random.Random()` per request, not a cached singleton
+(`get_rng()`, unlike `get_key_provider()`/`get_session_store()`/
+`get_tier2_model()`).** `Session.allocate_or_lookup_name()`'s own lock
+only serialises access to *that one session's* state — it says nothing
+about a shared RNG object two *different* sessions' concurrent calls
+might both be mutating at once. `random.Random`'s methods are not
+thread-safe against concurrent callers, so a single cached instance
+reused across concurrent requests on different sessions would be a real
+bug: two threads calling `.shuffle()` on the same `Random` object
+simultaneously, unsynchronised. A fresh, unseeded instance per call
+sidesteps the question entirely, at effectively zero construction cost,
+rather than adding a lock this project's threading model doesn't
+otherwise need.
+
+**`REQUIRED_WINDOW_LOOKAHEAD` widened from `PERSON`-only to all three
+pools — a real correctness fix, not a refactor.** Before this task,
+`rehydrate.py` derived the response-path sliding window's lookahead
+margin from `max(len(name) for name in DEFAULT_NAME_CANDIDATES)` —
+correct while only `PERSON` used the name map, silently wrong the
+moment `ADDRESS` surrogates (structurally much longer than "First
+Last" names) could also appear. `src/session/candidates.py::max_candidate_length()`
+now spans all three pools; `rehydrate.py` imports it instead of
+reaching into `names.py` directly, and imports the shared
+`NAME_MAP_ENTITY_TYPES` instead of hardcoding its own copy of the same
+three-element set (CLAUDE.md: "no duplicated logic") — this was a real,
+if latent, duplication: `rehydrate.py`'s own `_NAME_MAP_ENTITY_TYPES`
+was defined independently of wherever `sanitize.py` would eventually
+need the identical set, and Task 5 is precisely that "eventually."
+
+**A real substring-collision case now exists in the name-map pools,
+where the old docstring claimed none did — documented, not fixed.**
+`rehydrate.py`'s module docstring previously claimed "no name in
+`src/session/names.py`'s placeholder list is a prefix of another." That
+claim is false for the new list: last names `"Khan"`/`"Khanna"` mean
+`"Priya Khan"` is a literal substring of `"Priya Khanna"` if a session
+ever mints both. This is not a new bug — `_pattern_for()`'s existing
+longest-first alternation (built in Phase 3 Task 4, tested by
+`test_longest_known_surrogate_wins_when_one_is_a_substring_of_another`)
+already resolves it correctly, exactly as it already does for the
+FF1 side. Confirmed by re-reading `_pattern_for()` and Python's `re`
+alternation semantics rather than assumed: case sensitivity means a
+*shorter* name can never accidentally match as a substring starting
+mid-word inside a *longer* one (a mid-word position is lowercase; every
+candidate's own leading letter is capitalised), so the only real
+collision shape is one candidate being an exact *prefix* of another
+sharing the same leading token — which `"Khan"`/`"Khanna"` is, and which
+the existing mechanism already handles. The module docstring is
+corrected to state this as a real, present case rather than a
+theoretical one ruled out by inspection.
+
+**Alternatives considered.**
+- Hand-type ~5,000 individual names/orgs/addresses: rejected outright —
+  exactly the "classic time sink" BUILD.md's benchmark section already
+  names as a reason to generate programmatically instead, applied here
+  to a candidate pool for the same reason.
+- Scope this task to `PERSON` only, per the narrower framing a prior
+  session had already written into `PHASE_4_SUMMARY.md`'s "known
+  limitations"/"what's next": presented to the product owner as a real
+  option (not assumed away) — rejected in favour of all three types,
+  since BUILD.md's own Phase 4 gate text names org/address surrogate
+  consistency explicitly, and leaving two of three Tier-2 types
+  permanently unsanitizable is a worse "Phase 4 complete" story than
+  building two more (mechanically identical) candidate pools.
+- A single shared `random.Random()` singleton for `get_rng()`, matching
+  the other factories' `@lru_cache` shape: rejected — see the
+  concurrency reasoning above; this is the one factory in this family
+  where caching is actively wrong, not merely unnecessary.
+- Keep `rehydrate.py`'s own hardcoded `_NAME_MAP_ENTITY_TYPES` rather
+  than centralising it in `session/candidates.py`: rejected — the
+  moment `sanitize.py` needed the identical set (this task), keeping
+  two independent copies in sync by hand is exactly the drift
+  CLAUDE.md's "no duplicated logic" rule exists to prevent.
+
+**Why.** BUILD.md, Phase 4: "Name surrogates from the finite name list
+via the Phase-3 map" — now genuinely true for all three Tier-2 types,
+proven end-to-end at the cascade-adjacent sanitize level
+(`tests/unit/test_sanitize.py`, including a same-session
+consistency test) and over the real HTTP request/response cycle
+(`tests/integration/test_chat_completions_route.py::test_person_span_round_trips_through_the_full_http_request_response_cycle`),
+mirroring the FF1 side's existing round-trip proof
+(`test_rehydrate_integration.py`).
+
+---
+
+## 2026-07-21 - Phase 4 closeout: a committed gate test, two stale-documentation fixes, one stale-comment fix
+
+**Decision.** Before writing the Phase 4 closeout summary, the
+repository was reviewed for the same things every phase closeout in
+this project checks: temporary code, stale comments, duplicated logic,
+and documentation that no longer matches what the code actually does.
+Three real findings, all fixed as part of closing this phase rather
+than carried forward silently:
+
+1. **BUILD.md's own Phase 4 gate line had no single committed,
+   reproducible test proving it**, verbatim: "Hinglish sentence with a
+   name, an org, an address, and a PAN -> correct spans, correct tier
+   attribution, surrogates consistent across turns." The capability
+   existed (Tasks 3-5), but the specific, literal gate scenario was
+   only ever demonstrated piecemeal across several narrower tests, none
+   of which used genuinely Hinglish/code-switched text. Closed with a
+   new `real_model`-marked test,
+   `tests/integration/test_phase_4_gate.py::test_phase_4_gate_hinglish_name_org_address_and_pan`,
+   mirroring `test_phase_3_gate.py`'s own closeout-task pattern (Phase
+   3, Task 6). The sentence used was not invented and hoped for — it
+   was run directly against `get_tier2_model()` first (a throwaway
+   probe script, not committed) to confirm the real model actually
+   resolves `PERSON`, `ORG`, and `ADDRESS` in it before the test's
+   assertions were written around that observed behaviour, the same
+   "measure, don't guess" discipline Task 2's own three-round model
+   evaluation already established. "Consistent across turns" is proven
+   by sending the identical real-value content twice on one session and
+   asserting the two sanitized bodies that crossed to "upstream" are
+   byte-identical — a single, robust assertion covering all four
+   entities' consistency at once, rather than parsing individual
+   surrogate spans out of a Hindi-English-mixed sentence.
+2. **`docs/LIMITATIONS.md`'s UPI/email entry claimed "Resolved in Phase
+   3."** It was never resolved — the entry's own body already said so
+   ("no surrogate domain is registered... the session-scoped map...
+   doesn't exist until Phase 3," which reads correctly only as "not yet
+   resolved, pending Phase 3," not "resolved by Phase 3"). Phase 3 built
+   the map; nothing in Phase 3 or Phase 4 ever registered UPI/email
+   against it (`src/session/candidates.py`'s `NAME_MAP_ENTITY_TYPES` is
+   `PERSON`/`ORG`/`ADDRESS` only — the three types BUILD.md's Phase 4
+   scope actually names). Corrected in place, with the correction
+   itself stated in the entry rather than silently fixed — a wrong
+   "resolved" claim sitting in a limitations file is a worse failure
+   than the original gap, since a reader trusts this specific file to
+   be current.
+3. **`docs/LIMITATIONS.md`'s "no unstructured-entity detection yet"
+   entry was stale** — Phase 4 resolves exactly what it describes. Kept
+   (not deleted) and marked resolved, per this file's own established
+   convention for entries later phases close (see the ingress-surrogate
+   and UPI/email entries already using this pattern).
+4. **A comment in `src/session/session.py`
+   (`allocate_or_lookup_name()`) said "no Tier-2 detector exists yet to
+   produce this [a same real_value, two different entity_types
+   collision]."** False as of this same phase's Task 5 — real
+   detectors now call this method for all three name-map types.
+   Corrected to state the case is now reachable in principle (not
+   merely hypothetical), while keeping the same underlying engineering
+   call: this remains an accepted Phase 3 simplification, not something
+   to fix speculatively without an observed failure.
+
+**Why fix these now rather than note them and move on.** CLAUDE.md:
+"if a comment is wrong, fix it" (comments), and this project's own
+standard for `docs/LIMITATIONS.md` specifically is that it "states,
+plainly, what this system does not yet guarantee" — a limitations file
+containing an incorrect "resolved" claim is actively worse than an
+honestly-stated open gap, because a future reader (or a reviewer
+checking "did you configure things fairly," CLAUDE.md's own recurring
+example question) has no way to tell the difference between "resolved"
+and "claimed resolved, actually still broken" without independently
+re-verifying every claim — exactly the trust the rest of this project's
+documentation discipline is built to avoid requiring.
+
+**What was checked and found clean, not requiring changes.** No
+TODO/FIXME/XXX markers, no `print()`/`breakpoint()` calls, no skipped or
+`xfail`-marked tests, no commented-out code, anywhere under `src/`,
+`app/`, or `tests/`. `mypy.ini`/`pytest.ini`/`.env.example`/
+`requirements.txt` all already reflect Phase 4's additions (`gliner`
+type-stub scoping, the `real_model` marker, `NER_MODEL`/`NER_WARMUP`,
+the CPU-only torch wheel index) with no drift found. `PROJECT_STATE.md`
+remains, correctly, absent — a Phase 0 decision (see
+`docs/PHASE_0_SUMMARY.md`), reaffirmed at every phase closeout since
+(Phase 2, Phase 3), not an oversight of this phase.
+
+**Why.** BUILD.md's Phase Protocol requires closing each phase with a
+verified DoD and updated documentation before the next phase begins;
+this is that verification, performed directly against the repository's
+actual current state rather than assumed from the summary documents
+already on file.

@@ -4,12 +4,20 @@ Wires together the components earlier tasks built: SSEEventParser and
 chat_stream (Phase 1) parse and re-serialize upstream SSE; SlidingWindow
 (Phase 1; Phase 3 Task 4 added its `transform` seam) buffers response
 text; `pipeline.sanitize` (Phase 2 Task 6; Phase 3 Task 3 added
-ingress-surrogate recognition) replaces every newly-detected entity
-with its surrogate before the body ever reaches the upstream client,
-and leaves an already-recognised surrogate from an earlier turn
-untouched; `pipeline.rehydrate` (Phase 3 Task 4) is the response-path
-counterpart — every surrogate the upstream echoes back, streaming or
-not, is replaced with its real value before the caller ever sees it.
+ingress-surrogate recognition; Phase 4 Task 3 added the injected
+`Tier2Model`, so Tier-1 and Tier-2 spans are both detected) replaces
+every newly-detected entity with its surrogate before the body ever
+reaches the upstream client, and leaves an already-recognised surrogate
+from an earlier turn untouched; `pipeline.rehydrate` (Phase 3 Task 4) is
+the response-path counterpart — every surrogate the upstream echoes
+back, streaming or not, is replaced with its real value before the
+caller ever sees it.
+
+`get_tier2_model()` is the same `@lru_cache`d singleton
+`app/main.py`'s startup warmup already constructs and warms — this
+route depends on it via FastAPI's `Depends`, not a fresh construction,
+so no request pays the model's own multi-second load cost (Phase 4
+Task 2).
 
 Every request must carry `X-Session-Id` (Phase 3 architectural
 decision: explicit required session header, fail closed if missing) —
@@ -37,6 +45,7 @@ treats a surrogate domain mismatch as its own fixed branch, always a
 """
 
 import json
+import random
 from collections.abc import AsyncIterator
 from contextlib import AbstractAsyncContextManager
 
@@ -46,11 +55,15 @@ from fastapi.responses import StreamingResponse
 
 from src.core.clock import Clock, get_clock
 from src.core.exceptions import UpstreamError
+from src.core.fail_mode import FailMode, get_fail_mode
 from src.core.types import CorrelationId, SessionId, new_correlation_id
+from src.detect.tier2.gliner_model import get_tier2_model
+from src.detect.tier2.model import Tier2Model
 from src.pipeline.field_walker import JSONValue
 from src.pipeline.rehydrate import REQUIRED_WINDOW_LOOKAHEAD, rehydrate, rehydrate_body
 from src.pipeline.sanitize import sanitize
 from src.pipeline.sliding_window import SlidingWindow
+from src.session.rng import get_rng
 from src.proxy.chat_stream import (
     ContentDelta,
     DoneMarker,
@@ -134,6 +147,9 @@ async def chat_completions(
     key_provider: KeyProvider = Depends(get_key_provider),
     session_store: SessionStore = Depends(get_session_store),
     clock: Clock = Depends(get_clock),
+    tier2_model: Tier2Model = Depends(get_tier2_model),
+    fail_mode: FailMode = Depends(get_fail_mode),
+    rng: random.Random = Depends(get_rng),
 ) -> Response:
     session_id_header = request.headers.get(_SESSION_ID_HEADER)
     if not session_id_header:
@@ -155,7 +171,16 @@ async def chat_completions(
         raise HTTPException(status_code=400, detail="request body must be a JSON object")
     body: dict[str, JSONValue] = parsed_body
     correlation_id = new_correlation_id()
-    sanitized_body = sanitize(body, key_provider, session, clock, correlation_id=correlation_id)
+    sanitized_body = sanitize(
+        body,
+        key_provider,
+        session,
+        clock,
+        tier2_model,
+        fail_mode,
+        rng,
+        correlation_id=correlation_id,
+    )
     if not bool(sanitized_body.get("stream", False)):
         return await _forward_non_streaming(
             client, sanitized_body, session, key_provider, correlation_id

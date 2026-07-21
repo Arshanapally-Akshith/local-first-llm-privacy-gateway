@@ -27,11 +27,16 @@ BUILD.md's rehydration-fidelity harness (a later task) is where the
 per-category miss rate gets measured, not this module's job to close.
 
 Where two known surrogates from the same session could both match at a
-position (only possible if one is an exact substring of the other — not
-expected in practice: FF1 outputs are effectively random within their
-domain, and no name in `src/session/names.py`'s placeholder list is a
-prefix of another), the longer one wins, mirroring
-`src/detect/precedence.py`'s own same-kind tie-break rule.
+position (only possible if one is an exact substring of the other), the
+longer one wins, mirroring `src/detect/precedence.py`'s own same-kind
+tie-break rule (`_pattern_for()`, below). This is not just a theoretical
+guard: Phase 4 Task 5's production-sized name-map candidate pools
+(`src/session/candidates.py`) do contain real prefix pairs sharing a
+first component — e.g. last names "Khan"/"Khanna" in
+`src/session/names.py` mean "Priya Khan" is a literal substring of
+"Priya Khanna" if a session ever minted both. FF1 outputs remain
+effectively random within their domain, so this scenario is specific to
+the name-map side, not structured entities.
 """
 
 import re
@@ -41,28 +46,24 @@ from src.core.exceptions import RehydrationError
 from src.core.logging import get_gateway_logger, log_event, redact_safe
 from src.core.types import CorrelationId, EntityType, Tier
 from src.pipeline.field_walker import JSONValue, rebuild, walk
+from src.session.candidates import NAME_MAP_ENTITY_TYPES, max_candidate_length
 from src.session.known_surrogate import KnownSurrogate
-from src.session.names import DEFAULT_NAME_CANDIDATES
 from src.session.session import Session
 from src.surrogate import engine, registry
 from src.surrogate.key_provider import KeyProvider
 
-_NAME_MAP_ENTITY_TYPES: Final[frozenset[EntityType]] = frozenset({"PERSON", "ORG", "ADDRESS"})
-"""Entity types rehydrated via the session's name map
-(`Session.lookup_real_name`), not FF1 decryption — mirrors
-ARCHITECTURE.md's Surrogate Architecture split between fixed/finite
-domains (stateless FF1) and the unbounded-domain names (session map)."""
-
 REQUIRED_WINDOW_LOOKAHEAD: Final[int] = max(
     registry.max_registered_surrogate_length(),
-    max(len(name) for name in DEFAULT_NAME_CANDIDATES),
+    max_candidate_length(),
 )
 """The sliding window's lookahead margin for the response path — derived,
 not guessed, from the longest surrogate this session could ever need to
 rehydrate: the longest currently-registered FF1 domain output, or the
-longest name in the current candidate list, whichever is longer.
-Recomputed automatically (at import time) whenever either source
-changes — there is no second, hand-copied number to fall out of sync.
+longest candidate across every name-map type (`PERSON`/`ORG`/`ADDRESS`
+— Phase 4 Task 5 widened this from `PERSON`-only, since `ADDRESS`
+candidates are materially longer), whichever is longer. Recomputed
+automatically (at import time) whenever any source changes — there is
+no second, hand-copied number to fall out of sync.
 
 Why no extra margin for decoration, contradicting ARCHITECTURE.md's
 literal "longest entity... plus longest decoration" phrasing: that
@@ -166,7 +167,7 @@ def rehydrate_body(
 def _resolve_real_value(
     surrogate: str, entity_type: EntityType, session: Session, key_provider: KeyProvider
 ) -> str:
-    if entity_type in _NAME_MAP_ENTITY_TYPES:
+    if entity_type in NAME_MAP_ENTITY_TYPES:
         real_value = session.lookup_real_name(surrogate)
         if real_value is None:
             raise RehydrationError(
@@ -185,7 +186,7 @@ def _tier_for(entity_type: EntityType) -> Tier:
     checksum/regex structured types; Tier 2 = name-map types) rather
     than introducing a second, independently-set tier value that could
     drift from it."""
-    return 2 if entity_type in _NAME_MAP_ENTITY_TYPES else 1
+    return 2 if entity_type in NAME_MAP_ENTITY_TYPES else 1
 
 
 def _pattern_for(known: dict[str, KnownSurrogate]) -> re.Pattern[str]:

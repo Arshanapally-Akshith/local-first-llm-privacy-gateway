@@ -80,6 +80,31 @@ class Settings(BaseSettings):
     logging rule is that no level, including DEBUG, may ever emit
     plaintext PII — the guarantee is structural, not level-gated."""
 
+    ner_model: str = Field(min_length=1, default="urchade/gliner_multi_pii-v1")
+    """Tier-2 model identifier (Phase 4). Defaulted, unlike
+    fail_mode/session_ttl/fpe_key: choosing a model is not itself a
+    security-relevant trade-off the way FAIL_MODE is, so a sensible
+    default (unlike those three) doesn't hide a silent security choice —
+    it just saves an operator a step, the same reasoning `upstream_timeout`
+    already uses. This specific default was chosen by measurement, not
+    guessed: see `docs/DECISIONS.md`, Phase 4 Task 2, for the evaluation
+    against `gliner_small-v2.1` and other GLiNER-class checkpoints that
+    picked it (concentrated ADDRESS-recall and false-positive-rate
+    improvements on a synthetic corpus, weighed against its larger RAM
+    footprint)."""
+
+    ner_warmup: bool = Field(default=True)
+    """Whether to load and run one warm-up inference through the Tier-2
+    model at startup, before the server binds. Defaulted `True`: the
+    failure mode of warming by default is a slightly slower startup;
+    the failure mode of *not* warming by default is BUILD.md's own
+    named danger — "cold start hides inside p50" — silently, on every
+    deployment that didn't think to flip a flag. Unlike FAIL_MODE, only
+    one side of this default is actually safe, so (per the same
+    reasoning `src/session/store.py`'s `DEFAULT_MAX_SESSIONS` already
+    documents) a defaulted, overridable flag is appropriate here, not a
+    forced explicit choice."""
+
 
 @lru_cache
 def get_settings() -> Settings:

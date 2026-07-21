@@ -32,6 +32,7 @@ caller.
 
 from typing import Literal
 
+from src.core.config import get_settings
 from src.core.exceptions import GatewayError
 from src.core.logging import get_gateway_logger, log_event
 from src.core.types import CorrelationId
@@ -90,3 +91,20 @@ def resolve_failure(
             f"{event} failed under FAIL_MODE=closed: {type(cause).__name__}"
         ) from cause
     log_event(get_gateway_logger(), event, correlation_id=correlation_id)
+
+
+def get_fail_mode() -> FailMode:
+    """FastAPI dependency / plain-call entry point returning the
+    configured `FAIL_MODE`, mirroring `get_key_provider()`'s and
+    `get_session_store()`'s shape: a thin factory around `get_settings()`
+    that callers depend on, rather than reaching for `get_settings()`
+    themselves at every call site (CLAUDE.md: dependency-injected, never
+    reached for globally).
+
+    Not cached: unlike `get_session_store()`/`get_tier2_model()`, there
+    is no expensive construction here to amortise — `get_settings()` is
+    already its own `@lru_cache`d singleton, so this is just a one-field
+    read, cheap enough that caching this function's own output would be
+    an optimisation with nothing measured to justify it.
+    """
+    return get_settings().fail_mode

@@ -24,11 +24,44 @@ from datetime import datetime, timedelta, timezone
 import pytest
 
 from src.core.logging import get_gateway_logger
+from src.detect.tier2.gliner_model import get_tier2_model
+from src.detect.tier2.model import ModelEntityMatch
 
 os.environ.setdefault("FPE_KEY", "test-fpe-key-not-a-real-secret")
 os.environ.setdefault("SESSION_TTL", "1800")
 os.environ.setdefault("FAIL_MODE", "closed")
 os.environ.setdefault("UPSTREAM_BASE_URL", "http://127.0.0.1:8081")
+
+
+class _NoOpTier2Model:
+    """A zero-cost `Tier2Model` stand-in for the FastAPI dependency
+    `routes.py::chat_completions` takes on (Phase 4 Task 3,
+    `Depends(get_tier2_model)`).
+
+    Without this override, every integration test that POSTs to
+    `/v1/chat/completions` through the real `app` — none of which are
+    marked `real_model` or have anything to do with Tier-2 detection —
+    would trigger FastAPI resolving the *real* `get_tier2_model()`
+    dependency at request time and loading actual GLiNER weights
+    (multi-second, ~1.5GB+), defeating `pytest.ini`'s entire
+    `-m "not real_model"` split. `tests/integration/test_tier2_real_model.py`
+    never goes through this override at all — it constructs
+    `GLiNERTier2Model`/calls `get_tier2_model()` directly, bypassing
+    FastAPI's dependency system entirely, so this fixture never shadows
+    it.
+    """
+
+    def find_entities(self, text: str) -> list[ModelEntityMatch]:
+        return []
+
+
+@pytest.fixture(autouse=True)
+def _no_real_tier2_model_over_http() -> Iterator[None]:
+    from app.main import app
+
+    app.dependency_overrides[get_tier2_model] = _NoOpTier2Model
+    yield
+    app.dependency_overrides.pop(get_tier2_model, None)
 
 
 class _CollectingHandler(logging.Handler):

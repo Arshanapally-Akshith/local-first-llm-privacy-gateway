@@ -1,65 +1,63 @@
-"""A placeholder finite candidate list for Tier-2 name-surrogate
-allocation.
+"""The production-sized candidate list for `PERSON` name-surrogate
+allocation (Phase 4 Task 5), superseding Phase 3's 40-entry placeholder.
 
-Deliberately small and explicitly a placeholder — **not** the
-production list Phase 4 will need once real PERSON/ORG/ADDRESS
-detection exists and starts calling `Session.allocate_or_lookup_name()`
-for real. Sized only to exercise the allocator's own collision and
-exhaustion mechanics in Phase 3 Task 2's tests (BUILD.md, Phase 3:
-"Test with a forced-tiny name list to make collisions certain").
+Generated, not hand-typed: a first-name pool and a last-name pool
+(~70 entries each, all single tokens, pan-Indian in origin — no
+compound names, so a cartesian join with a single space never produces
+an ambiguous or colliding boundary) are combined into every "First
+Last" pairing. This mirrors this project's own benchmark-generation
+philosophy (BUILD.md: "slot carriers... entities injected
+programmatically") applied to a candidate *pool* rather than a labeled
+dataset — the alternative, typing ~5,000 individual names by hand, is
+exactly the kind of manual-data time sink this project's methodology
+exists to avoid elsewhere.
 
-Sourcing a properly-sized (~5,000 names, per ARCHITECTURE.md's own
-collision-math illustration), responsibly-curated production list —
-and deciding whether one list serves PERSON/ORG/ADDRESS alike or each
-needs its own — is explicitly deferred to whenever Phase 4 wires real
-Tier-2 detection to this allocator. Using this list for anything beyond
-Phase 3's own mechanics tests would be premature.
+Sized to match ARCHITECTURE.md's own collision-math illustration
+("a ~5,000-name list and ~60 distinct people in a session gives roughly
+a 30% birthday-collision probability") — 72 first names x 71 last names
+= 5,112 candidates, in the same order of magnitude as that number.
 """
 
 from typing import Final
 
-DEFAULT_NAME_CANDIDATES: Final[tuple[str, ...]] = (
-    "Aarav Sharma",
-    "Vivaan Gupta",
-    "Aditya Verma",
-    "Vihaan Reddy",
-    "Arjun Nair",
-    "Sai Iyer",
-    "Reyansh Rao",
-    "Krishna Menon",
-    "Ishaan Pillai",
-    "Rohan Kapoor",
-    "Ananya Joshi",
-    "Diya Patel",
-    "Saanvi Desai",
-    "Aadhya Shah",
-    "Kiara Mehta",
-    "Myra Chaudhary",
-    "Anika Bose",
-    "Navya Chatterjee",
-    "Pari Mukherjee",
-    "Riya Banerjee",
-    "Kabir Malhotra",
-    "Advik Sinha",
-    "Vivan Chopra",
-    "Atharv Bhatt",
-    "Ayaan Trivedi",
-    "Yash Choudhary",
-    "Dhruv Agarwal",
-    "Karthik Subramaniam",
-    "Rahul Krishnan",
-    "Siddharth Rajan",
-    "Meera Ramesh",
-    "Priya Venkatesh",
-    "Neha Krishnamurthy",
-    "Pooja Balasubramaniam",
-    "Kavya Narayanan",
-    "Tanvi Raghavan",
-    "Ishita Sundaram",
-    "Aisha Pillai",
-    "Zara Khan",
-    "Fatima Sheikh",
+_FIRST_NAMES: Final[tuple[str, ...]] = (
+    "Aarav", "Vivaan", "Aditya", "Vihaan", "Arjun", "Sai", "Reyansh", "Krishna",
+    "Ishaan", "Rohan", "Kabir", "Advik", "Vivan", "Atharv", "Ayaan", "Yash",
+    "Dhruv", "Karthik", "Rahul", "Siddharth", "Aryan", "Rudra", "Vedant", "Aarush",
+    "Devansh", "Kian", "Rishi", "Arnav", "Shaurya", "Veer", "Aakash", "Aman",
+    "Deepak", "Gaurav", "Harsh", "Manish", "Naveen", "Pankaj", "Raj", "Sanjay",
+    "Sunil", "Tarun", "Uday", "Vikram", "Ananya", "Diya", "Saanvi", "Aadhya",
+    "Kiara", "Myra", "Anika", "Navya", "Pari", "Riya", "Meera", "Priya",
+    "Neha", "Pooja", "Kavya", "Tanvi", "Ishita", "Aisha", "Zara", "Fatima",
+    "Divya", "Shreya", "Sneha", "Anjali", "Bhavna", "Charu", "Deepika", "Esha",
 )
-"""40 synthetic Indian-name-shaped placeholders — enough to force
-collisions and exhaustion in a small test fixture, nowhere near enough
-for real Tier-2 traffic. See the module docstring."""
+"""72 single-token first names, deliberately spanning multiple linguistic/
+regional origins (Hindi, Tamil, Telugu, Punjabi, Urdu, Sanskrit-derived)
+to match this project's stated Hinglish/pan-Indian scope — not a
+synthetic dataset label, just a source pool for surrogate generation."""
+
+_LAST_NAMES: Final[tuple[str, ...]] = (
+    "Sharma", "Gupta", "Verma", "Reddy", "Nair", "Iyer", "Rao", "Menon",
+    "Pillai", "Kapoor", "Joshi", "Patel", "Desai", "Shah", "Mehta", "Chaudhary",
+    "Bose", "Chatterjee", "Mukherjee", "Banerjee", "Malhotra", "Sinha", "Chopra", "Bhatt",
+    "Trivedi", "Choudhary", "Agarwal", "Subramaniam", "Krishnan", "Rajan", "Ramesh", "Venkatesh",
+    "Krishnamurthy", "Balasubramaniam", "Narayanan", "Raghavan", "Sundaram", "Khan", "Sheikh",
+    "Bhattacharya", "Ghosh", "Das", "Dutta", "Sengupta", "Iyengar", "Nambiar", "Warrier",
+    "Kulkarni", "Deshmukh", "Bhosale", "Jadhav", "Pawar", "Gaikwad", "Naidu", "Chowdhury",
+    "Roy", "Saxena", "Mathur", "Kaul", "Dhawan", "Bajaj", "Goyal", "Jain",
+    "Bansal", "Aggarwal", "Arora", "Khanna", "Sethi", "Anand", "Kohli", "Bhalla",
+)
+"""71 single-token surnames, spanning the same regional breadth as
+`_FIRST_NAMES` — no entry here is also a first name, so no cartesian
+pairing can accidentally read as "Last First" instead of "First Last"."""
+
+
+def _generate_name_candidates() -> tuple[str, ...]:
+    return tuple(f"{first} {last}" for first in _FIRST_NAMES for last in _LAST_NAMES)
+
+
+DEFAULT_NAME_CANDIDATES: Final[tuple[str, ...]] = _generate_name_candidates()
+"""Every `_FIRST_NAMES` x `_LAST_NAMES` combination, as one flat,
+deduplicated-by-construction tuple (two disjoint single-token pools
+joined by a single space can never produce the same "First Last"
+string from two different pairs)."""

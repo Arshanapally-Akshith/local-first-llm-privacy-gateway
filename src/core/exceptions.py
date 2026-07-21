@@ -59,6 +59,32 @@ class NameListExhaustedError(GatewayError):
     """
 
 
+class DetectionError(GatewayError):
+    """A detector produced a `Span` candidate that cannot correspond to
+    a real position in the text it claims to describe — e.g. an offset
+    pair outside `[0, len(text)]`, or `start >= end`.
+
+    Real, immediate caller: `src/detect/tier2/detector.py`'s
+    `Tier2Detector.detect()`, converting a model's raw entity match into
+    a `Span`. Tier-1 detectors never raise this — regex `finditer`
+    offsets are always valid for the string being matched, by
+    construction. A model's offsets carry no such guarantee (Phase 4's
+    Tier 2 is the first detector whose offsets are externally computed,
+    not derived from Python's own regex engine over the same string),
+    so the conversion step must not trust them silently.
+
+    This is exceptional, not an expected miss: `Span.__post_init__`
+    already rejects `start >= end` or `start < 0`, but has no way to
+    check `end <= len(text)`, since a bare `Span` never sees the source
+    text at all. `DetectionError` is what closes that gap at the one
+    place a text/offset pair are both in scope together.
+
+    The message states offsets and entity type only — never the
+    matched text or the source text (CLAUDE.md: "no sensitive values in
+    the message").
+    """
+
+
 class RehydrationError(GatewayError):
     """A session's known-surrogate registry says a given surrogate's
     `entity_type` is a name-map type (`PERSON`/`ORG`/`ADDRESS`), but the

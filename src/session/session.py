@@ -195,13 +195,18 @@ class Session:
             # `real_value` alone is the identity key here — `entity_type`
             # is recorded on the resulting KnownSurrogate below but never
             # checked against a *prior* allocation for this same string.
-            # If the same real_value were ever submitted twice with two
-            # different entity_types (no Tier-2 detector exists yet to
-            # produce this), this would silently return the first call's
-            # surrogate and type. An intentional Phase 3 simplification,
-            # not an oversight — revisit if Phase 4 introduces a real
-            # case where one string plausibly means two different entity
-            # types within one session.
+            # If the same real_value is ever submitted twice with two
+            # different entity_types, this silently returns the first
+            # call's surrogate and type. An intentional Phase 3
+            # simplification, not an oversight — this case is reachable
+            # for real as of Phase 4 Task 5 (real PERSON/ORG/ADDRESS
+            # detection is wired to this method), not merely hypothetical
+            # anymore, but no failure from it has been observed or
+            # reported. Revisit if it ever manifests as a real bug (e.g.
+            # a string GLiNER tags ORG in one message and ADDRESS in
+            # another, within the same session) rather than fixing it
+            # speculatively now against a case that may never occur in
+            # practice.
             existing = self._name_forward.get(real_value)
             if existing is not None:
                 return existing

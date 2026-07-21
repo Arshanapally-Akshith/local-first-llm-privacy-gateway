@@ -10,13 +10,17 @@ unreachable host or a real slow one.
 """
 
 import json
-from collections.abc import Iterator
+from collections.abc import Iterator, Sequence
 
 import httpx
 import pytest
 from fastapi.testclient import TestClient
 
 from app.main import app
+from src.core.fail_mode import FailMode, get_fail_mode
+from src.core.types import Offset
+from src.detect.tier2.gliner_model import get_tier2_model
+from src.detect.tier2.model import ModelEntityMatch
 from src.mock_upstream.main import app as mock_app
 from src.proxy.upstream_client import get_upstream_client
 
@@ -37,10 +41,47 @@ def _override_with_transport(transport: httpx.MockTransport) -> None:
     app.dependency_overrides[get_upstream_client] = _get_client
 
 
+class _RaisingTier2Model:
+    """Phase 4 Task 4: a Tier-2 model that always fails, to prove
+    `FAIL_MODE`'s HTTP-level behaviour end-to-end — `app/main.py`'s
+    `FailClosedError` -> 503 handler, exercised for real rather than
+    only at the `cascade.detect()`/`sanitize()` unit level."""
+
+    def find_entities(self, text: str) -> Sequence[ModelEntityMatch]:
+        raise RuntimeError("model process crashed")
+
+
+def _override_tier2_model_to_always_fail() -> None:
+    app.dependency_overrides[get_tier2_model] = _RaisingTier2Model
+
+
+class _FixedMatchesTier2Model:
+    """Phase 4 Task 5: a Tier-2 model returning a fixed set of matches,
+    filtered to whichever ones fit the `text` a given call receives —
+    same reasoning as `test_sanitize.py`'s own fake (this route's
+    `sanitize()` call walks multiple body fields, not just the one the
+    test cares about)."""
+
+    def __init__(self, matches: Sequence[ModelEntityMatch]) -> None:
+        self._matches = matches
+
+    def find_entities(self, text: str) -> Sequence[ModelEntityMatch]:
+        return [m for m in self._matches if m.end <= len(text)]
+
+
+def _override_tier2_model_with_matches(matches: Sequence[ModelEntityMatch]) -> None:
+    app.dependency_overrides[get_tier2_model] = lambda: _FixedMatchesTier2Model(matches)
+
+
+def _override_fail_mode(mode: FailMode) -> None:
+    app.dependency_overrides[get_fail_mode] = lambda: mode
+
+
 @pytest.fixture(autouse=True)
 def _clear_overrides() -> Iterator[None]:
     yield
     app.dependency_overrides.pop(get_upstream_client, None)
+    app.dependency_overrides.pop(get_fail_mode, None)
 
 
 def _parse_sse_content(raw: str) -> str:
@@ -236,3 +277,68 @@ def test_empty_session_id_header_returns_400() -> None:
     )
 
     assert response.status_code == 400
+
+
+def test_tier2_failure_under_fail_mode_closed_returns_503() -> None:
+    """Phase 4 Task 4's HTTP-level proof: `app/main.py`'s
+    `FailClosedError` handler actually maps a real Tier-2 failure to a
+    503, end-to-end through the real route — not just at the
+    `cascade.detect()`/`sanitize()` unit level."""
+    _override_with_mock_upstream()
+    _override_tier2_model_to_always_fail()
+    _override_fail_mode("closed")
+    client = TestClient(app, headers={"X-Session-Id": "test-session-1"})
+
+    response = client.post(
+        "/v1/chat/completions",
+        json={"model": "gpt-4", "messages": [{"role": "user", "content": "hi"}], "stream": False},
+    )
+
+    assert response.status_code == 503
+
+
+def test_tier2_failure_under_fail_mode_open_still_returns_200() -> None:
+    """The counterpart of the test above: the same Tier-2 failure, under
+    `open`, must not take the request down — it forwards with whatever
+    Tier 1 alone found."""
+    _override_with_mock_upstream()
+    _override_tier2_model_to_always_fail()
+    _override_fail_mode("open")
+    client = TestClient(app, headers={"X-Session-Id": "test-session-2"})
+
+    response = client.post(
+        "/v1/chat/completions",
+        json={"model": "gpt-4", "messages": [{"role": "user", "content": "hi"}], "stream": False},
+    )
+
+    assert response.status_code == 200
+
+
+def test_person_span_round_trips_through_the_full_http_request_response_cycle() -> None:
+    """Phase 4 Task 5's own end-to-end proof: a detected `PERSON` span
+    is substituted with a name-map surrogate before the mock upstream
+    ever sees it, the mock echoes that surrogate back (it only ever
+    sees what the gateway sent), and the caller receives the *real*
+    name back — the same round-trip `test_rehydrate_integration.py`
+    already proves for Tier-1 (FF1) entities, now proven for a Tier-2
+    name-map entity for the first time."""
+    _override_with_mock_upstream()
+    content = "Ramesh Kumar called yesterday"
+    person_start = content.index("Ramesh Kumar")
+    person_end = person_start + len("Ramesh Kumar")
+    _override_tier2_model_with_matches(
+        [ModelEntityMatch(start=Offset(person_start), end=Offset(person_end), entity_type="PERSON")]
+    )
+    client = TestClient(app, headers={"X-Session-Id": "test-session-person-roundtrip"})
+
+    response = client.post(
+        "/v1/chat/completions",
+        json={
+            "model": "gpt-4",
+            "messages": [{"role": "user", "content": content}],
+            "stream": False,
+        },
+    )
+
+    assert response.status_code == 200
+    assert response.json()["choices"][0]["message"]["content"] == content

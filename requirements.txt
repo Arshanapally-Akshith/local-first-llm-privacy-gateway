@@ -1,6 +1,23 @@
+# PyTorch CPU-only wheels (Tier 2 / GLiNER's own dependency) - an
+# extra index, not a replacement one: torch/torchvision/torchaudio are
+# published here as CPU-only builds; every other package below still
+# resolves from standard PyPI. Without this, plain `pip install torch`
+# pulls the much larger CUDA-enabled build by default, which this CPU-
+# only project (BUILD.md: "no GPU") never needs. See docs/DECISIONS.md,
+# Phase 4 Task 2.
+--extra-index-url https://download.pytorch.org/whl/cpu
+
 fastapi==0.115.0
 uvicorn[standard]==0.32.0
 pydantic==2.9.2
 pydantic-settings==2.5.2
 python-dotenv==1.0.1
 cryptography==49.0.0
+
+# Tier 2 (GLiNER-class) detection - Phase 4. Version-pinned after a
+# measured evaluation (docs/DECISIONS.md, Phase 4 Task 2); gliner's own
+# transitive dependencies (transformers, huggingface_hub, tokenizers,
+# onnxruntime, sentencepiece) are left unpinned here and resolved by
+# whatever gliner==0.2.27 itself requires.
+torch==2.13.0+cpu
+gliner==0.2.27
