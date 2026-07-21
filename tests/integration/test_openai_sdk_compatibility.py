@@ -50,6 +50,7 @@ def _sdk_client() -> AsyncOpenAI:
     return AsyncOpenAI(
         base_url="http://gateway.test/v1",
         api_key="test-key-not-real",
+        default_headers={"X-Session-Id": "sdk-compat-test-session"},
         http_client=httpx.AsyncClient(
             transport=httpx.ASGITransport(app=app), base_url="http://gateway.test"
         ),

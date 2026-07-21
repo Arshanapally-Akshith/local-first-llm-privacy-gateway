@@ -57,7 +57,7 @@ def _parse_sse_content(raw: str) -> str:
 
 def test_non_streaming_forwards_and_returns_upstream_body() -> None:
     _override_with_mock_upstream()
-    client = TestClient(app)
+    client = TestClient(app, headers={"X-Session-Id": "test-session-1"})
 
     response = client.post(
         "/v1/chat/completions",
@@ -74,7 +74,7 @@ def test_non_streaming_forwards_and_returns_upstream_body() -> None:
 
 def test_streaming_reassembles_content_byte_identical() -> None:
     _override_with_mock_upstream()
-    client = TestClient(app)
+    client = TestClient(app, headers={"X-Session-Id": "test-session-1"})
 
     response = client.post(
         "/v1/chat/completions",
@@ -94,7 +94,7 @@ def test_streaming_with_pathological_chunking_still_reassembles() -> None:
     """The BUILD.md Phase 1 Gate scenario: mock forced to split a known
     string across many chunks; gateway output must still be correct."""
     _override_with_mock_upstream()
-    client = TestClient(app)
+    client = TestClient(app, headers={"X-Session-Id": "test-session-1"})
 
     response = client.post(
         "/v1/chat/completions",
@@ -114,7 +114,7 @@ def test_non_streaming_connection_failure_returns_502() -> None:
         raise httpx.ConnectError("connection refused", request=request)
 
     _override_with_transport(httpx.MockTransport(_raise_connect_error))
-    client = TestClient(app)
+    client = TestClient(app, headers={"X-Session-Id": "test-session-1"})
 
     response = client.post(
         "/v1/chat/completions",
@@ -129,7 +129,7 @@ def test_non_streaming_timeout_returns_504() -> None:
         raise httpx.ReadTimeout("timed out", request=request)
 
     _override_with_transport(httpx.MockTransport(_raise_timeout))
-    client = TestClient(app)
+    client = TestClient(app, headers={"X-Session-Id": "test-session-1"})
 
     response = client.post(
         "/v1/chat/completions",
@@ -147,7 +147,7 @@ def test_streaming_connection_failure_also_returns_502() -> None:
         raise httpx.ConnectError("connection refused", request=request)
 
     _override_with_transport(httpx.MockTransport(_raise_connect_error))
-    client = TestClient(app)
+    client = TestClient(app, headers={"X-Session-Id": "test-session-1"})
 
     response = client.post(
         "/v1/chat/completions",
@@ -170,7 +170,7 @@ def test_malformed_streaming_response_terminates_stream_honestly_not_as_an_error
         )
 
     _override_with_transport(httpx.MockTransport(_return_garbage_sse))
-    client = TestClient(app)
+    client = TestClient(app, headers={"X-Session-Id": "test-session-1"})
 
     response = client.post(
         "/v1/chat/completions",
@@ -186,7 +186,7 @@ def test_upstream_4xx_propagated_verbatim_non_streaming() -> None:
         return httpx.Response(400, json={"error": {"message": "bad request"}})
 
     _override_with_transport(httpx.MockTransport(_return_400))
-    client = TestClient(app)
+    client = TestClient(app, headers={"X-Session-Id": "test-session-1"})
 
     response = client.post(
         "/v1/chat/completions",
@@ -207,8 +207,32 @@ def test_non_object_json_body_returns_400_not_a_crash(malformed_body: object) ->
     unchecked `assert isinstance(sanitized, dict)` -> an unhandled
     AssertionError -> a generic 500, never reaching the upstream client
     override below (proving it, not just asserting the status code)."""
-    client = TestClient(app)
+    client = TestClient(app, headers={"X-Session-Id": "test-session-1"})
 
     response = client.post("/v1/chat/completions", json=malformed_body)
+
+    assert response.status_code == 400
+
+
+def test_missing_session_id_header_returns_400() -> None:
+    """Phase 3 architectural decision: explicit required session header,
+    fail closed if missing — no derived/implicit session identity."""
+    client = TestClient(app)  # deliberately no X-Session-Id default here
+
+    response = client.post(
+        "/v1/chat/completions",
+        json={"model": "gpt-4", "messages": [{"role": "user", "content": "hi"}], "stream": False},
+    )
+
+    assert response.status_code == 400
+
+
+def test_empty_session_id_header_returns_400() -> None:
+    client = TestClient(app, headers={"X-Session-Id": ""})
+
+    response = client.post(
+        "/v1/chat/completions",
+        json={"model": "gpt-4", "messages": [{"role": "user", "content": "hi"}], "stream": False},
+    )
 
     assert response.status_code == 400
