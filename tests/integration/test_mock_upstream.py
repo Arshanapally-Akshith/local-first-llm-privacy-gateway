@@ -6,8 +6,10 @@ OpenAI-shaped and honours pathological chunking directives.
 """
 
 import json
+import logging
 from typing import Any
 
+import pytest
 from fastapi.testclient import TestClient
 
 from src.mock_upstream.main import app
@@ -149,3 +151,30 @@ def test_tolerates_unmodelled_real_sdk_fields() -> None:
     )
 
     assert response.status_code == 200
+
+
+def test_logs_the_raw_received_body_including_fields_it_does_not_model(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """The mock's own request model drops `tools` (see
+    `ChatCompletionRequest`'s `extra="ignore"`) — the logged line must
+    come from the raw body, or the Phase 2 gate ("mock upstream log
+    shows valid-format surrogates" in a tool definition) would have
+    nothing to show."""
+    with caplog.at_level(logging.INFO, logger="mock_upstream"):
+        client.post(
+            "/v1/chat/completions",
+            json={
+                "model": "gpt-4",
+                "messages": [{"role": "user", "content": "hi"}],
+                "tools": [
+                    {
+                        "type": "function",
+                        "function": {"name": "f", "description": "distinctive-marker-xyz"},
+                    }
+                ],
+            },
+        )
+
+    logged_messages = [record.getMessage() for record in caplog.records]
+    assert any("distinctive-marker-xyz" in message for message in logged_messages)

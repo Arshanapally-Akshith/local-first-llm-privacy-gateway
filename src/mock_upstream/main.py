@@ -10,20 +10,43 @@ by which URL is configured (see docs/DECISIONS.md).
 Not a stub: this is the only component that can produce the failure
 conditions the gateway exists to survive (forced pathological chunk
 boundaries), and the reason the whole demo runs with zero keys.
+
+Logs the raw body it receives, at INFO, via a plain stdlib logger —
+deliberately not the gateway's PII-safe formatter. This process stands
+in for the cloud provider (ARCHITECTURE.md's trust-boundary diagram
+puts it in the UNTRUSTED zone): its log is what a real third party
+would see, which is the entire point of a demo proving "the provider
+never sees the real data" (ARCHITECTURE.md, Executive Summary). If
+sanitize() is working, this log line shows surrogates only.
 """
 
 import json
+import logging
 import time
 import uuid
 from collections.abc import AsyncIterator
 
-from fastapi import FastAPI
+from fastapi import FastAPI, Request
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, ConfigDict
 
 from src.mock_upstream.chunking import resolve_chunks
 
 app = FastAPI()
+_logger = logging.getLogger("mock_upstream")
+_logger.setLevel(logging.INFO)
+_logger.addHandler(logging.StreamHandler())
+"""uvicorn attaches its console handler to its own named loggers
+(`uvicorn`, `uvicorn.error`), never to the root logger — so a bare
+`getLogger("mock_upstream")` relying only on propagation reaches no
+handler at all under real uvicorn (root has none either), and the
+message is dropped silently regardless of level. Confirmed by running
+the Phase 2 gate manually: without an explicit handler here, nothing
+printed. `propagate` is left at its default (`True`) rather than
+disabled: a logger always calls its own handlers first regardless of
+propagation, so this adds no duplicate line under uvicorn (root still
+has no handler there) while leaving `pytest`'s `caplog` — which
+attaches to root — still able to see the record in tests."""
 
 _DEFAULT_MODEL_NAME = "mock-gpt"
 
@@ -130,7 +153,13 @@ def _non_streaming_response(request: ChatCompletionRequest, content: str) -> dic
 @app.post("/v1/chat/completions", response_model=None)
 async def chat_completions(
     request: ChatCompletionRequest,
+    raw_request: Request,
 ) -> StreamingResponse | dict[str, object]:
+    # Logged from the raw ASGI request, not `request`: ChatCompletionRequest's
+    # `extra="ignore"` (see its docstring) silently drops fields this mock
+    # doesn't model — including `tools` — so logging the typed model would
+    # hide exactly the field the Phase 2 gate cares about.
+    _logger.info("mock upstream received body: %s", await raw_request.json())
     content = _echoed_content(request)
 
     if not request.stream:
