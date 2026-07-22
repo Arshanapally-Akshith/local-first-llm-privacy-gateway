@@ -1972,3 +1972,588 @@ verified DoD and updated documentation before the next phase begins;
 this is that verification, performed directly against the repository's
 actual current state rather than assumed from the summary documents
 already on file.
+
+---
+
+## 2026-07-22 - Phase 5 Task 1: span-matching criterion fixed as exact-span, exact-type, before any benchmark code exists
+
+**Decision.** The benchmark's scoring criterion for "did an arm detect
+this entity" is **exact-span match**: a predicted detection counts as a
+true positive for a gold entity if and only if `predicted.start ==
+gold.start`, `predicted.end == gold.end` (character offsets into the
+example's raw text, half-open interval, matching `src/core/types.py`'s
+existing `Span` convention exactly), **and** the predicted entity type
+maps, under a canonical cross-arm type table (built in the scorer task,
+not this one), to the gold entity type. No partial credit, no
+overlap-fraction threshold, no tokenizer of any kind is used anywhere
+in scoring.
+
+Matching is one-to-one per gold span: at most one predicted span may be
+credited against a given gold span. Where a single arm emits more than
+one prediction with the offsets and type that would match one gold
+span, only one counts as the true positive; any others are counted as
+false positives against that arm's own precision. This prevents an arm
+from inflating recall by over-predicting. Full assignment mechanics
+(how ties among multiple *distinct* overlapping predictions are broken,
+if that case arises in practice) are an implementation detail of the
+scorer task, not a methodological choice this entry needs to fix in
+advance — the *matching rule itself* (exact offsets, exact type,
+one-to-one) is what must be fixed now, per BUILD.md, and is.
+
+This entry exists and is written *before* `benchmarks/` contains a
+single line of scoring code, and before the dataset generator (Task 2)
+or any arm integration (Tasks 4-6) exists — deliberately, per BUILD.md's
+own instruction for this exact decision ("Span-matching criterion fixed
+**before measuring**") and CLAUDE.md's forbidden-actions list ("Change
+the span-matching criterion after seeing results").
+
+### 1. What BUILD.md actually requires here
+
+Two passages constrain this decision, and neither is optional:
+
+- Phase 5's bullet list: *"Span-matching criterion fixed before
+  measuring. Exact-span vs token-level vs partial credit differ by 10+
+  points. Pick one, justify it in `docs/DECISIONS.md`, apply it
+  identically to all four arms."*
+- Phase 5's Definition of Done: *"Span-matching criterion documented and
+  applied uniformly."*
+
+ARCHITECTURE.md's Benchmark Architecture section restates the same
+three named options and adds one fact this decision must engage with
+directly: *"Presidio's own evaluator uses token-level."* CLAUDE.md's
+forbidden-actions list adds the enforcement mechanism: the criterion,
+once fixed, may not move after results exist, for any reason, including
+an unfavourable result.
+
+Nothing in BUILD.md or ARCHITECTURE.md names a fourth criterion beyond
+the three above (exact-span, token-level, partial-overlap) — those are
+the only ones "explicitly discussed," so those are the three compared
+below.
+
+### 2. The three options, compared on this project's own terms
+
+**Exact-span matching.** A prediction matches only if its `(start, end,
+entity_type)` is identical to the gold span's.
+
+- *Advantage — it is the only criterion that measures the actual
+  operational property this system claims.* CLAUDE.md: *"Off-by-one on
+  overlapping spans corrupts the JSON body."* Substitution happens at
+  exact character offsets — a detector that finds "roughly the right
+  entity" with the wrong boundary does not produce a correct FF1
+  surrogate (wrong domain length) or a correct name-map substitution
+  (wrong text sliced out) in the real pipeline. A benchmark criterion
+  more forgiving than the pipeline's own correctness requirement would
+  report a recall number the pipeline cannot actually deliver in
+  production.
+- *Advantage — no external tokenizer, so no hidden per-arm bias.* The
+  four arms tokenize completely differently on the inside: Tier 1's
+  regex/checksum detectors emit raw character offsets tied to no
+  tokenizer at all; Presidio's default backend uses spaCy's tokenizer;
+  GLiNER uses its own subword tokenizer. Any token-level or
+  overlap-based criterion requires picking *one* tokenizer to score all
+  four arms with — a choice with no principled answer here — and
+  whichever arm's natural span boundaries happen to align best with
+  that scorer's tokenizer boundaries would be favoured for reasons
+  unrelated to whether it actually got the entity right. Exact
+  character-offset comparison needs no such choice and is identical
+  regardless of what any arm's internals do.
+- *Advantage — zero free parameters.* No threshold, no weighting scheme,
+  nothing to tune. Consistent with CLAUDE.md's "no magic constants" and
+  "boring is a feature" — and, more specifically here, nothing left for
+  a future session to be tempted to adjust once real numbers exist.
+- *Advantage — the gold labels have no legitimate ambiguity to be lenient
+  about.* This is the point of slot-and-inject (BUILD.md, Phase 5):
+  entities are injected programmatically into carrier templates at
+  known slot boundaries, so gold offsets are exact by construction, not
+  a human annotator's judgment call about where a name "really" starts.
+  Token-level and partial-overlap criteria exist mainly to absorb
+  *annotator* disagreement in human-labeled corpora (e.g. CoNLL-style
+  NER benchmarks) — a problem this dataset does not have, because
+  nobody is annotating it. Being lenient about an ambiguity that does
+  not exist here would only be absorbing *detector* imprecision, which
+  is exactly the thing being measured.
+- *Disadvantage — it is harsh on genuinely-partial detections.* A
+  detector that returns `"Arjun"` for a gold `"Arjun Reddy"` PERSON
+  span, or that includes/excludes a leading title (`"Mr. Arjun Reddy"`
+  vs. `"Arjun Reddy"`), scores as a complete miss, not partial credit,
+  even though something about the entity's location was found. This is
+  a real cost, addressed below (why it is accepted rather than
+  designed around).
+- *Disadvantage — diverges from Presidio's own convention*, discussed
+  in its own section below rather than folded in here, because it is
+  the one point ARCHITECTURE.md itself flags and deserves a direct
+  answer.
+
+**Token-level matching.** Text is tokenized; each token is scored
+independently (present in a gold span of type X → should be predicted
+as type X), and P/R/F1 are computed over tokens rather than whole
+spans.
+
+- *Advantage — more forgiving of boundary imprecision*, and it is the
+  scheme `presidio-evaluator` (Presidio's own measurement tool) uses by
+  default, so it has a ready-made, well-precedented implementation to
+  point at.
+- *Disadvantage — requires choosing a tokenizer, and that choice is not
+  neutral here.* As above: this project's own differentiator is
+  Hinglish/Telugu-English code-switched and transliterated text —
+  exactly the text where tokenization is least standardized and most
+  tokenizer-dependent. A token-level score computed with, say, spaCy's
+  tokenizer would be silently measuring "how well did each arm's
+  entity match spaCy's idea of a token boundary," which is a different
+  question from "did this system correctly protect this entity," and
+  is a question this project has no principled way to prefer one
+  tokenizer's answer to over another's.
+- *Disadvantage — decouples the score from the pipeline's real failure
+  mode.* A system can score high token-level recall while producing
+  zero spans whose exact offsets would actually round-trip correctly
+  through substitution — the metric would say "mostly protected" about
+  requests the real pipeline would corrupt or leave partially
+  sanitized. For a benchmark whose entire purpose is to be trustworthy
+  about a privacy property (CLAUDE.md: "Honest measurement over
+  favourable measurement"), a metric that can read well while the
+  underlying security property fails is the wrong metric, independent
+  of whether it happens to make any particular arm look better or
+  worse.
+
+**Partial-overlap / partial-credit matching** (e.g. any predicted span
+overlapping a gold span of the same type counts as at least a partial
+match, optionally weighted by overlap fraction or a MUC-style scheme).
+
+- *Advantage — most forgiving; captures "detected roughly the right
+  entity."*
+- *Disadvantage — introduces at least one more arbitrary parameter*
+  (an overlap threshold, or a weighting function) with no principled
+  value for this project, which is precisely the kind of knob CLAUDE.md
+  warns against turning after seeing results ("Do not tune until arm 4
+  wins"). A parameter that does not exist cannot be tuned, consciously
+  or not; a parameter that does exist eventually will be, even if only
+  by omission of scrutiny.
+- *Disadvantage — the weakest correspondence to any real privacy
+  outcome.* Substitution is binary in the real pipeline: an entity is
+  either correctly replaced by a surrogate or it is not. "70% span
+  overlap" is not a state a real request can be in. Reporting a recall
+  number under this criterion risks implying a graduated privacy
+  outcome (partially protected) where none exists (the un-substituted
+  remainder of a partially-matched entity still fully identifies the
+  person). This is the sharpest mismatch of the three options against
+  ARCHITECTURE.md's own stated privacy claim: *"Structured entities are
+  checksum-guaranteed... Names... are best-effort... This system
+  provides risk reduction with a measured residual. It does not provide
+  a privacy guarantee."* A partial-credit recall number is closer to
+  overclaiming that guarantee than exact-match recall is.
+
+### 3. Why Presidio's own token-level convention is not adopted here
+
+ARCHITECTURE.md names this specifically, so it gets a direct answer
+rather than an implicit one. Adopting Presidio's own evaluator
+convention would have one real advantage — it is Presidio's own
+yardstick, so a Presidio maintainer could not object to being measured
+by their own tool's logic. But it does not survive the two reasons
+above: it still requires choosing a tokenizer applied uniformly to all
+four arms (Presidio's evaluator ships with its own default, which is
+not obligated to be neutral toward the other three arms' internals),
+and it still decouples the reported number from whether the request
+would actually be correctly sanitized in this project's real pipeline.
+"Score everyone the way the baseline scores itself" is a fairness
+argument about the *baseline comparison*, not about which number best
+answers this project's own question ("would this have leaked?"), and
+CLAUDE.md's hierarchy is explicit that evaluation honesty about *this
+project's own claim* outranks matching a competitor's convention for
+its own sake.
+
+### 4. Recommendation, stated from first principles only
+
+**Exact-span, exact-type matching, one-to-one per gold span, no
+tokenizer, no partial credit.** This follows from three facts about
+this specific project, not from any expectation about which arm the
+criterion will favour:
+
+1. The system's own domain type is already `(start, end, entity_type)`
+   (`src/core/types.py::Span`), and the system's own correctness
+   contract already depends on exact offsets (offset-based substitution,
+   `precedence.py`'s existing half-open-interval overlap semantics).
+   Scoring against anything looser than the type the rest of the
+   codebase already uses to define correctness would be measuring a
+   different, easier question than the one that matters.
+2. The dataset's gold labels have no annotation ambiguity to accommodate
+   — they are exact by construction (slot-and-inject), which is the one
+   precondition that makes strict exact-match scoring *fair* rather than
+   merely strict. A benchmark with human-annotated, inherently-fuzzy
+   gold labels would have a real argument for token-level or
+   partial-overlap leniency; this one does not.
+3. A harsher, more honest number is the correct trade for a project
+   whose stated goal is "honest measurement over favourable measurement"
+   and whose own privacy claim is explicitly a "measured residual," not
+   a guarantee. Exact-match will report a lower number than the other
+   two options on the same system — that is a feature of this criterion
+   for this project, not a defect to be designed around, and it must not
+   be revisited once arm 4's number is known.
+
+This recommendation is made before the dataset exists, before any arm
+is wired up, and before any P/R/F1 number of any kind has been computed
+for any arm — consistent with the requirement it is enforcing.
+
+### 5. Why changing this after benchmark generation would invalidate the comparison
+
+The criterion is not a presentation choice made after the fact; it is
+part of the *definition* of what "detected" means, and that definition
+must be identical and fixed across all four arms for the comparison to
+mean anything at all:
+
+- **Changing it after seeing results turns methodology into a knob.**
+  BUILD.md is explicit that arm 3 ≈ arm 4 is an acceptable, even good,
+  finding ("the cascade buys latency, not accuracy"). If the criterion
+  could still move at that point, there would be no way to distinguish
+  "we found an honest result" from "we adjusted the ruler until our arm
+  won" — and a reviewer cannot tell the difference from the outside
+  either, which is exactly the credibility failure CLAUDE.md's
+  forbidden-actions list names directly ("Tune the detector against the
+  benchmark until our arm wins" / "Change the span-matching criterion
+  after seeing results").
+- **A criterion swap after generation silently changes which detections
+  count, per arm, unevenly.** Because the three criteria diverge by
+  10+ points on the *same* system (BUILD.md's own stated fact) and
+  the four arms have structurally different span-boundary behaviour
+  (regex/checksum vs. spaCy-tokenized vs. GLiNER-subword-tokenized),
+  a switch from exact-span to token-level after the fact would not move
+  every arm's score by the same amount — it would asymmetrically help
+  whichever arm's boundary behaviour happens to align best with
+  whatever tokenizer got chosen at that later point. That asymmetry is
+  invisible in the final table; only the process discipline of fixing
+  the criterion first prevents it from ever being introduced.
+- **The committed artifact's reproducibility guarantee depends on it.**
+  BUILD.md's gate for this phase is deleting the README numbers, running
+  `make bench`, and getting the same numbers back. A scoring criterion
+  that could plausibly have been different is not a fixed part of the
+  measurement process — it is an unrecorded input, and the reproduced
+  numbers would only be reproducible *given* a methodology choice that
+  itself was never pinned down in advance, which does not satisfy the
+  gate in spirit even if it satisfies it mechanically.
+
+**Not decided by this entry, deliberately deferred to the scorer task
+(Task 7):** the canonical entity-type mapping table across arms (e.g.
+how Presidio's default type names map onto this project's
+`EntityType`s), and the exact one-to-one assignment algorithm when more
+than one distinct predicted span could plausibly match one gold span.
+Those are implementation mechanics of *applying* this criterion, not
+part of the criterion itself, and do not need to be fixed before the
+dataset or any arm exists — only the matching rule does, per BUILD.md's
+own phrasing ("pick one... apply it identically"), and that is what
+this entry fixes.
+
+---
+
+## 2026-07-22 - Phase 5 Task 7: a coincidental cross-type Tier-1 checksum
+collision, discovered by the scorer's own test suite, not a bug
+
+**Decision.** No code changes at the time of this entry. This entry
+records a real, reproducible phenomenon
+`tests/integration/test_scoring_real_arm.py` discovered while proving
+the scorer (`benchmarks/scoring/`) against the real, committed Phase 5
+dataset and a real arm: a small fraction of generated `PHONE` values are,
+by pure coincidence, also Verhoeff-valid (or Luhn-valid), making them
+indistinguishable in shape and checksum validity from a genuine
+`AADHAAR` (or `CARD`) candidate at the exact same span. When this
+happens, `precedence.resolve()`'s already-approved (Phase 2) same-tier
+tie-break — longest match, then detector registration order — correctly
+and deterministically attributes the span to whichever detector is
+registered first (`AadhaarDetector`, then `CardDetector`, ...,
+`PhoneDetector` last — `src/detect/registry.py`). The gold label says
+`PHONE`; the cascade reports `AADHAAR`. Scored under the exact-span,
+exact-type criterion, this is a genuine false negative for `PHONE` (and
+a genuine false positive for `AADHAAR`) — not a scorer bug, not a
+cascade bug, and not a dataset-generator bug in the sense of doing
+anything the generator wasn't supposed to do at the time.
+
+**Mechanism, confirmed directly, not inferred.** `benchmarks/generate/entity_values.py::_generate_phone()`
+produces a `"91"`-prefixed value with probability 1/4 (one of four
+equally-likely prefixes: `""`, `"+91"`, `"91"`, `"0"`); a `"91"`-prefixed
+value is exactly 12 digits — identical in length to `AadhaarDetector`'s
+`\b\d{12}\b` candidate pattern. Whether the resulting 12-digit string
+also happens to be Verhoeff-valid is then a roughly 1-in-10 event (one
+valid check digit out of ten possible trailing digits), independent of
+how the leading digits were chosen. A `"+91"`-prefixed value (13 digits)
+sits inside `CardDetector`'s `\d{12,19}` range and has an independent
+~1-in-10 chance of being Luhn-valid. Verified against two real examples
+produced by the actual generator during this investigation:
+`918298529155` (Verhoeff-valid — confirmed via `verhoeff_is_valid()`)
+and `917818830734` (Luhn-valid — confirmed via `luhn_is_valid()`); both
+were confirmed, by calling `cascade.detect()` directly, to resolve to
+`AADHAAR`/`CARD` respectively, never `PHONE`, in the full cascade.
+
+**Why `PHONE` is the only type with this exposure.** `PAN`/`IFSC`/`UPI`/
+`VEHICLE_REG`/`EMAIL` are never pure-digit, so they can never match
+`AADHAAR`'s or `CARD`'s all-digit patterns at all. `AADHAAR` itself is
+registered *before* `CardDetector`, so a coincidentally-Luhn-valid
+Aadhaar value still wins its own tie and is never mis-attributed.
+`CARD`'s own generated values are 16 digits with a fixed leading `4`,
+and `AadhaarDetector`'s `\b\d{12}\b` pattern requires a word boundary on
+both sides — a 12-digit substring in the middle of a 16-digit run has no
+such boundary, so a Card value can never be mistaken for an Aadhaar
+candidate. Only `PhoneDetector`, registered last, with two of its four
+possible prefixes landing inside another Tier-1 detector's exact length
+range, has a real, identified collision surface.
+
+**Alternatives considered, at the time this entry was first written.**
+- **Fix `precedence.py`**: rejected — the tie-break rule is already
+  correctly, deterministically doing exactly what `docs/DECISIONS.md`
+  (2026-07-21, "Span precedence: Tier 1 always wins...") specifies.
+  Changing it to somehow prefer `PHONE` in this specific case would be
+  an arbitrary, undocumented special case with no principled
+  justification over any other same-tier collision.
+- **Fix the dataset generator (Task 2, at the time already approved and
+  closed)**: identified as a real design question, deliberately *not*
+  decided unilaterally in this entry — flagged to the product owner in
+  Task 7's own completion report instead. See the follow-up entry below
+  for the outcome.
+- **Fix only the test suite**: done regardless of the above — the test
+  that discovered this asserted a blanket "recall must be 1.0 for every
+  Tier-1 type," which was wrong once this collision surface was known to
+  exist, independent of whether the generator itself was ever changed.
+
+**Residual, stated plainly, at the time this entry was first written.**
+`ARCHITECTURE.md`'s claim "Tier 1 outputs are the only ones this system
+calls guaranteed... if the entity is present in a canonical,
+unobfuscated form, it is detected with certainty" remains true *per
+detector, per isolated span*. It does not guarantee *which* entity type
+a span is attributed to when two different Tier-1 detectors' value
+spaces coincidentally overlap in both shape and checksum validity at the
+identical span — a narrow, low-probability (order of a few percent of
+`PHONE` examples) residual. See the follow-up entry below: this residual
+no longer applies to the committed Phase 5 dataset specifically, though
+the underlying cascade behaviour it describes is unchanged and still
+real.
+
+**Why.** CLAUDE.md: "if a defect can hide, assume it is hiding, and go
+write the test that would catch it" — this is that defect (in the
+original test's assumption, not in the system), caught by exactly the
+kind of real-data, real-arm test this task's own scope called for
+(`tests/integration/test_scoring_real_arm.py`, not a synthetic fixture
+that would never have exercised the actual generator's output
+distribution).
+
+---
+
+## 2026-07-22 - Phase 5 Task 7 follow-up: `_generate_phone()` now rejects any candidate the real cascade precedence rule would reclassify
+
+**Decision.** Supersedes the "why this is not being fixed... in the
+dataset generator" position of the entry immediately above, on explicit
+product-owner approval (the entry above deliberately did not decide this
+unilaterally). `benchmarks/generate/entity_values.py::_generate_phone()`
+now regenerates a candidate — consuming more of the same injected
+`random.Random`'s stream, never reseeding it — whenever
+`_phone_candidate_wins_precedence()` reports that the real cascade
+precedence rule would resolve it to something other than `PHONE`. That
+helper builds `[detector.detect(candidate) for detector in
+get_tier1_detectors()]` and calls the real `precedence.resolve()`
+directly — the same functions the live cascade calls — rather than
+re-deriving "does any other detector also match this string" from a
+hand-reasoned rule about lengths and registration order. The committed
+dataset (`benchmarks/data/dataset.jsonl`) was regenerated with the fixed
+generator; all 385 `PHONE` gold values were confirmed, by running this
+same check against every one of them, to now resolve as `PHONE` with
+zero collisions remaining.
+
+**Why reuse `precedence.resolve()` rather than hand-code the specific
+collision rule identified above.** The entry above's own "why `PHONE` is
+the only type with this exposure" analysis is a hand-derived argument
+about lengths and registration order — useful for understanding *why*
+the bug happened, but exactly the kind of manual re-derivation that
+produced the original blanket "recall must be 1.0" assumption this
+task's test suite disproved. A validation function built the same
+hand-reasoned way would only be as trustworthy as that reasoning, and
+would silently stop protecting against a collision shape nobody thought
+to enumerate by hand. Calling the actual `get_tier1_detectors()` +
+`precedence.resolve()` pipeline means the check can never itself drift
+out of sync with what the cascade actually does — it *is* what the
+cascade does, run once at generation time instead of once at detection
+time.
+
+**Why this preserves determinism.** The retry loop only ever calls
+`rng.choice()`/`rng.randint()` again on the *same* `random.Random`
+instance passed into `_generate_phone()` — it never reseeds, never
+touches global `random` state, and never depends on wall-clock time or
+iteration order. The same seed therefore still always produces the same
+final dataset, byte-for-byte — reverified directly (two independent
+`build_dataset()` calls produced identical output; `write_jsonl()`
+called twice produced identical files) after this change, the same
+proof `benchmarks/generate/build_dataset.py`'s own tests already
+required before this fix.
+
+**Why the dataset's total example count and per-type entity counts are
+unchanged.** The fix only changes *which* string `_generate_phone()`
+returns for a given `random.Random` draw sequence, never how many times
+it is called or which templates/slots invoke it — every template still
+instantiates the same number of times, with the same entity-type slots.
+Reverified directly: 2,860 examples, 4,235 entity occurrences, and the
+identical per-type breakdown (`PHONE`: 385) before and after
+regeneration.
+
+**What this means for the entry above's residual.** The specific
+residual described there — a `PHONE` gold value in *this benchmark's
+dataset* occasionally resolving as `AADHAAR`/`CARD` — no longer applies:
+every committed `PHONE` value is now guaranteed, by construction, to
+resolve as `PHONE`. The *underlying cascade mechanism* the residual
+described (two Tier-1 detectors validating an identical span, resolved
+by registration order) is unchanged, still real, still correct, and now
+has a direct regression test of its own
+(`tests/integration/test_scoring_real_arm.py::test_cascade_precedence_still_resolves_a_deliberately_colliding_value_correctly`)
+independent of what the dataset happens to contain.
+
+**Alternatives considered.**
+- **Leave the dataset as-is, document the collision as a permanent,
+  disclosed residual** (the entry above's default position pending
+  product-owner input): rejected on explicit instruction — "the
+  benchmark should measure detector quality rather than accidental
+  generator ambiguity."
+- **Fix `precedence.py` instead of the generator**: rejected for the
+  same reason the entry above rejected it — the precedence rule is
+  correct, general-purpose production behaviour that many other things
+  depend on (the live gateway's own request path, not just this
+  benchmark); the ambiguity belongs to one generator's output
+  distribution, not to the rule that resolves ambiguity when it exists.
+- **A fixed retry cap with an exhaustion exception**, mirroring
+  `NameListExhaustedError`'s pattern for the (genuinely finite) name-map
+  candidate pools: rejected — phone-number generation draws from an
+  effectively unbounded space (`10^10` core values), so unlike a finite
+  candidate list, exhaustion is not a realistic failure mode to guard
+  against; adding one would be validating a scenario that cannot
+  practically occur (CLAUDE.md: don't add error handling for scenarios
+  that can't happen).
+
+**Why.** The product owner's own framing is the complete justification:
+a benchmark whose `PHONE` recall number partly reflects "did the
+generator happen to produce an ambiguous value" rather than "did the
+detector find the phone number" is not measuring what BUILD.md's Phase 5
+exists to measure. CLAUDE.md's "preserve the architecture unless a
+genuine issue is discovered" instruction is exactly why this required
+explicit approval before touching Task 2's already-closed output, rather
+than being silently decided inside Task 7's own scope.
+
+---
+
+## 2026-07-22 - Phase 5 Task 8 closeout: the ~13 residual AADHAAR false
+positives in arms 2 and 3 are Presidio's own overlap resolution, not a
+bug anywhere
+
+**Decision.** No code changes. A bounded investigation (per the product
+owner's explicit request, after the full benchmark run showed AADHAAR
+precision at .974 rather than 1.000 in arms 2, 3, and 4) identified the
+exact cause: 13 examples where a `PHONE` value's `"+91"` prefix means
+`AadhaarDetector`'s `\b\d{12}\b` pattern independently, correctly
+matches the 12 digits *after* the `+` — and that 12-digit substring is,
+by the same coincidental-checksum mechanism already documented in the
+Phase 5 Task 7 entries above, independently Verhoeff-valid roughly 1 in
+10 times. Confirmed directly for three of the 13:
+`verhoeff_is_valid("918113076941")`,
+`verhoeff_is_valid("918586220629")`, and
+`verhoeff_is_valid("917605996149")` all return `True`.
+
+**Why this is not the Task 7 collision recurring, and not something the
+generator fix should have caught.** `_generate_phone()`'s guard
+(`_phone_candidate_wins_precedence()`) checks whether *this project's
+own* `precedence.resolve()` — the function `benchmarks/arms/ours.py`
+and the live gateway both actually call — would attribute the span to
+something other than `PHONE`. Re-run directly against all 13 offending
+examples through `get_tier1_detectors()` + `precedence.resolve()` (the
+exact mechanism the guard checks): **zero** false positives survive.
+`PhoneDetector`'s own span (`"+91..."`, 13 characters, including the
+`+`) is one character longer than `AadhaarDetector`'s overlapping
+candidate span (12 digits, starting just after the `+`), so this
+project's own tie-break (`(tier, -length, detector_index)`, longest
+match first) correctly picks `PHONE` every time. The generator's fix is
+working exactly as designed, for the one thing it was ever designed to
+guarantee — this project's own cascade.
+
+**The actual mechanism, confirmed by direct comparison.** Arms 2 and 3
+register `DetectorBackedRecognizer(AadhaarDetector())` as one Presidio
+`EntityRecognizer` and rely on Presidio's own stock `PhoneRecognizer`
+for `PHONE` (Task 4's own scope decision: "CARD/EMAIL/PHONE/PERSON...
+Presidio already ships recognizers for all four out of the box"). Each
+recognizer's `analyze()` call is independent and returns its own
+genuine, correct candidate spans directly — `DetectorBackedRecognizer`
+never calls `precedence.resolve()` itself (it wraps exactly one
+detector; there is nothing to resolve *within* one recognizer's own
+output). Combining *across* recognizers is `AnalyzerEngine`'s own job,
+and Presidio's internal conflict resolution is not the same function,
+does not know about this project's "tier" concept, and — demonstrated
+directly for `ex-02823`'s text (`"Siddharth Subramaniam ka Aadhaar
+999926628123 aur phone +918113076941 dono form mein daal dijiye."`) —
+does not eliminate the overlapping, lower-priority `AADHAAR` candidate
+the way this project's own `precedence.resolve()` does:
+
+```
+Arm 2 (Presidio + custom) predictions:
+  AADHAAR (33, 45) '999926628123'   <- correct
+  AADHAAR (57, 69) '918113076941'   <- spurious; overlaps the PHONE span below
+  PERSON  (0, 21)  'Siddharth Subramaniam'
+  PHONE   (56, 69) '+918113076941'  <- correct
+
+Arm 4 (ours) predictions:
+  PERSON  (0, 21)  'Siddharth Subramaniam'
+  AADHAAR (33, 45) '999926628123'   <- correct
+  PHONE   (56, 69) '+918113076941'  <- correct, AADHAAR candidate eliminated
+```
+
+**Why this is not a bug in any single component.** `AadhaarDetector`
+correctly found a genuinely Verhoeff-valid 12-digit run — that is
+exactly its job, and it has no way to know a different entity's value
+happens to contain it. Presidio's `PhoneRecognizer` correctly found the
+phone number. `precedence.resolve()` correctly resolves the overlap
+when it is actually given both candidates — proven directly above. The
+only place these three correct pieces fail to compose correctly is
+*inside Presidio's own engine*, which was never built to know about
+this project's tier concept, and was never supposed to. This is a real,
+structural, disclosed property of arms 2 and 3 specifically, not a
+project bug to fix.
+
+**Why this is not being "fixed."** The three options considered mirror
+the Task 7 entries' own reasoning exactly:
+- **Patch `DetectorBackedRecognizer` to run `precedence.resolve()`
+  itself, across recognizers**: rejected — a single recognizer cannot
+  see what *other* recognizers will independently find; the only way to
+  apply this project's own precedence rule inside Presidio's engine
+  would be to replace Presidio's own conflict resolution wholesale,
+  which stops arms 2/3 from being a fair measurement of *Presidio
+  configured with custom recognizers* and starts measuring "Presidio's
+  detection primitives wearing this project's own precedence logic" —
+  a different, uninteresting arm.
+- **Regenerate the dataset to avoid `"+91"`-prefixed phone numbers
+  whose trailing digits are coincidentally Verhoeff-valid**: rejected —
+  this residual is not a property of the dataset in isolation (the
+  Task 7 fix already proved these exact 13 examples score perfectly
+  under this project's own cascade); it is a property of how *Presidio
+  itself* combines independent recognizer results. Removing it from the
+  dataset would hide a real, measurable difference between the arms
+  behind a dataset choice, which is a worse kind of dishonesty than
+  reporting a slightly-below-1.000 precision number with its cause
+  documented.
+- **Document it and leave the measured numbers as they are**
+  (**chosen**): the .974 AADHAAR precision in arms 2 and 3 is a real,
+  reproducible, now-fully-explained measurement of a genuine
+  architectural difference between Presidio's own conflict resolution
+  and this project's own precedence rule — exactly the kind of honest,
+  attributable delta BUILD.md's ablation design exists to surface, not
+  a defect to launder away.
+
+**Likely connection to a second observed pattern, not separately
+investigated.** The full benchmark run also showed arm 3 with lower
+`PERSON`/`ORG` precision than arm 4 at identical recall. The mechanism
+here is the same shape: arm 3's GLiNER-backed `PERSON`/`ORG`/`ADDRESS`
+recognizers (`presidio_gliner/engine.py`, also built on
+`DetectorBackedRecognizer`) are combined with arm 3's Tier-1 custom
+recognizers by the same Presidio-internal conflict resolution, not this
+project's own `precedence.resolve()`. Plausible, not confirmed — this
+entry documents only what was actually investigated (the AADHAAR case,
+per the bounded scope of this task), and does not extend the claim
+further than what was directly verified.
+
+**Why.** The product owner's own instruction is the complete
+justification for stopping here rather than changing anything: "if the
+cause is a dataset artifact or an expected checksum collision, document
+it... if it reveals a genuine detector issue, stop and report before
+making any code changes." This is neither a dataset artifact nor a
+detector issue — every component involved behaved correctly in
+isolation — so the disposition is the third, unnamed-but-implied case:
+document a real, correctly-behaving-components-composing-imperfectly
+finding, and change nothing.
