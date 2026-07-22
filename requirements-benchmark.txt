@@ -1,0 +1,47 @@
+# Benchmark-only dependencies (Phase 5, Task 4) - never imported by
+# src/ or app/, and never required to run, test, or deploy the live
+# gateway (BUILD.md constraint #2). Kept out of requirements.txt
+# deliberately: presidio-analyzer, spacy, and the en_core_web_lg model
+# have no place in the gateway's own runtime dependency footprint.
+#
+# Version selection, verified directly against package metadata (not
+# guessed) before pinning - see docs/DECISIONS.md, Phase 5 Task 4:
+#
+# - presidio-analyzer==2.2.361 (not the latest 2.2.363): 2.2.362/2.2.363
+#   tightened their own pydantic floor to >=2.12.5, which conflicts with
+#   this project's pinned pydantic==2.9.2 (requirements.txt) - a change
+#   to that pin would touch the live gateway's config layer
+#   (pydantic-settings, src/core/config.py), not just benchmark tooling.
+#   2.2.361 (released 2026-02-12, same actively-maintained 2.2.x line,
+#   no relevant API differences for this project's usage) declares only
+#   pydantic<3.0.0,>=2.0.0 - satisfied by the existing pin with zero
+#   changes to it. Verified via PyPI's requires_dist metadata directly,
+#   not the package's GitHub source (which can be ahead of what is
+#   actually released).
+# - spacy==3.8.14: the current latest release; satisfies
+#   presidio-analyzer==2.2.361's own constraint (spacy!=3.7.0,>=3.4.4,
+#   no upper bound at this presidio-analyzer version) and this
+#   project's Python 3.11 (spacy's own requires-python is <3.15,>=3.9).
+# - en_core_web_lg model release 3.8.0: spaCy's official models version
+#   to the *minor* spaCy series, not the exact patch - 3.8.0 is the only
+#   en_core_web_lg release published for the entire 3.8.x spaCy line
+#   (confirmed via the explosion/spacy-models GitHub releases API),
+#   installed via a direct wheel URL rather than a separate
+#   `python -m spacy download` step so `pip install -r
+#   requirements-benchmark.txt` remains one command, matching this
+#   project's existing one-command-install convention.
+#
+# presidio-anonymizer is deliberately NOT a dependency here: Phase 5
+# only scores detected spans (BUILD.md's exact-span/exact-type
+# criterion, docs/DECISIONS.md 2026-07-22), never anonymized output, so
+# nothing in this benchmark needs it. This also sidesteps a second,
+# separate conflict: presidio-anonymizer requires
+# cryptography>=48.0.1,<49.0.0, which excludes this project's pinned
+# cryptography==49.0.0 (used for the real FF1 key derivation,
+# src/surrogate/key_provider.py) outright.
+
+-r requirements.txt
+
+presidio-analyzer==2.2.361
+spacy==3.8.14
+en_core_web_lg @ https://github.com/explosion/spacy-models/releases/download/en_core_web_lg-3.8.0/en_core_web_lg-3.8.0-py3-none-any.whl
