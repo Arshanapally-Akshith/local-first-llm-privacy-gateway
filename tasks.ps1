@@ -19,7 +19,7 @@
 
 param(
     [Parameter(Position = 0)]
-    [ValidateSet("install", "run", "mock", "test", "lint", "typecheck", "check", "rehydration-fidelity", "bench")]
+    [ValidateSet("install", "run", "mock", "test", "lint", "typecheck", "check", "rehydration-fidelity", "bench", "adversarial")]
     [string]$Task = "check"
 )
 
@@ -69,5 +69,14 @@ switch ($Task) {
         # inference, multi-hour runtime; deliberately not part of
         # `check`, which must stay fast enough to run on every change.
         python -m benchmarks.runner.run
+    }
+    "adversarial" {
+        # Regenerates adversarial/results/latest.json and latest.md -
+        # BUILD.md, Phase 6: every discovered bypass case run against
+        # the real, running gateway (ARCHITECTURE.md's Adversarial
+        # Evaluation section) - real Tier-2 inference for the
+        # transliterated_names class; deliberately not part of `check`
+        # for the same reason `bench` isn't.
+        python -m adversarial.runner.run
     }
 }
