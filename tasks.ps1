@@ -19,7 +19,7 @@
 
 param(
     [Parameter(Position = 0)]
-    [ValidateSet("install", "run", "mock", "test", "lint", "typecheck", "check", "rehydration-fidelity")]
+    [ValidateSet("install", "run", "mock", "test", "lint", "typecheck", "check", "rehydration-fidelity", "bench")]
     [string]$Task = "check"
 )
 
@@ -60,5 +60,14 @@ switch ($Task) {
         # assert; re-run after committing code changes to re-stamp the
         # artifact with the commit that actually produced its numbers.
         python -m rehydration_fidelity.runner.run
+    }
+    "bench" {
+        # Regenerates benchmarks/results/latest.json and latest.md -
+        # BUILD.md, Phase 5: "make bench regenerates every number in
+        # the README." Runs all four ablation arms (two GLiNER-backed)
+        # over the full committed dataset - real models, real
+        # inference, multi-hour runtime; deliberately not part of
+        # `check`, which must stay fast enough to run on every change.
+        python -m benchmarks.runner.run
     }
 }

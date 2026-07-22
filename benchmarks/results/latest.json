@@ -1,0 +1,410 @@
+{
+  "arms": {
+    "ours": {
+      "AADHAAR": {
+        "f1": 1.0,
+        "false_negatives": 0,
+        "false_positives": 0,
+        "precision": 1.0,
+        "recall": 1.0,
+        "support": 495,
+        "true_positives": 495
+      },
+      "ADDRESS": {
+        "f1": 0.9945155393053016,
+        "false_negatives": 3,
+        "false_positives": 0,
+        "precision": 1.0,
+        "recall": 0.9890909090909091,
+        "support": 275,
+        "true_positives": 272
+      },
+      "CARD": {
+        "f1": 1.0,
+        "false_negatives": 0,
+        "false_positives": 0,
+        "precision": 1.0,
+        "recall": 1.0,
+        "support": 330,
+        "true_positives": 330
+      },
+      "EMAIL": {
+        "f1": 1.0,
+        "false_negatives": 0,
+        "false_positives": 0,
+        "precision": 1.0,
+        "recall": 1.0,
+        "support": 330,
+        "true_positives": 330
+      },
+      "IFSC": {
+        "f1": 1.0,
+        "false_negatives": 0,
+        "false_positives": 0,
+        "precision": 1.0,
+        "recall": 1.0,
+        "support": 165,
+        "true_positives": 165
+      },
+      "ORG": {
+        "f1": 0.6704453441295547,
+        "false_negatives": 26,
+        "false_positives": 381,
+        "precision": 0.5207547169811321,
+        "recall": 0.9409090909090909,
+        "support": 440,
+        "true_positives": 414
+      },
+      "PAN": {
+        "f1": 1.0,
+        "false_negatives": 0,
+        "false_positives": 0,
+        "precision": 1.0,
+        "recall": 1.0,
+        "support": 330,
+        "true_positives": 330
+      },
+      "PERSON": {
+        "f1": 0.8282504012841092,
+        "false_negatives": 51,
+        "false_positives": 270,
+        "precision": 0.7413793103448276,
+        "recall": 0.9381818181818182,
+        "support": 825,
+        "true_positives": 774
+      },
+      "PHONE": {
+        "f1": 1.0,
+        "false_negatives": 0,
+        "false_positives": 0,
+        "precision": 1.0,
+        "recall": 1.0,
+        "support": 385,
+        "true_positives": 385
+      },
+      "UPI": {
+        "f1": 1.0,
+        "false_negatives": 0,
+        "false_positives": 0,
+        "precision": 1.0,
+        "recall": 1.0,
+        "support": 330,
+        "true_positives": 330
+      },
+      "VEHICLE_REG": {
+        "f1": 1.0,
+        "false_negatives": 0,
+        "false_positives": 0,
+        "precision": 1.0,
+        "recall": 1.0,
+        "support": 330,
+        "true_positives": 330
+      }
+    },
+    "presidio_custom": {
+      "AADHAAR": {
+        "f1": 0.9870388833499502,
+        "false_negatives": 0,
+        "false_positives": 13,
+        "precision": 0.9744094488188977,
+        "recall": 1.0,
+        "support": 495,
+        "true_positives": 495
+      },
+      "ADDRESS": {
+        "f1": 0.0,
+        "false_negatives": 275,
+        "false_positives": 0,
+        "precision": 0.0,
+        "recall": 0.0,
+        "support": 275,
+        "true_positives": 0
+      },
+      "CARD": {
+        "f1": 1.0,
+        "false_negatives": 0,
+        "false_positives": 0,
+        "precision": 1.0,
+        "recall": 1.0,
+        "support": 330,
+        "true_positives": 330
+      },
+      "EMAIL": {
+        "f1": 1.0,
+        "false_negatives": 0,
+        "false_positives": 0,
+        "precision": 1.0,
+        "recall": 1.0,
+        "support": 330,
+        "true_positives": 330
+      },
+      "IFSC": {
+        "f1": 1.0,
+        "false_negatives": 0,
+        "false_positives": 0,
+        "precision": 1.0,
+        "recall": 1.0,
+        "support": 165,
+        "true_positives": 165
+      },
+      "ORG": {
+        "f1": 0.0,
+        "false_negatives": 440,
+        "false_positives": 0,
+        "precision": 0.0,
+        "recall": 0.0,
+        "support": 440,
+        "true_positives": 0
+      },
+      "PAN": {
+        "f1": 1.0,
+        "false_negatives": 0,
+        "false_positives": 0,
+        "precision": 1.0,
+        "recall": 1.0,
+        "support": 330,
+        "true_positives": 330
+      },
+      "PERSON": {
+        "f1": 0.4835079549864183,
+        "false_negatives": 202,
+        "false_positives": 1129,
+        "precision": 0.3555936073059361,
+        "recall": 0.7551515151515151,
+        "support": 825,
+        "true_positives": 623
+      },
+      "PHONE": {
+        "f1": 0.9685534591194969,
+        "false_negatives": 0,
+        "false_positives": 25,
+        "precision": 0.9390243902439024,
+        "recall": 1.0,
+        "support": 385,
+        "true_positives": 385
+      },
+      "UPI": {
+        "f1": 1.0,
+        "false_negatives": 0,
+        "false_positives": 0,
+        "precision": 1.0,
+        "recall": 1.0,
+        "support": 330,
+        "true_positives": 330
+      },
+      "VEHICLE_REG": {
+        "f1": 1.0,
+        "false_negatives": 0,
+        "false_positives": 0,
+        "precision": 1.0,
+        "recall": 1.0,
+        "support": 330,
+        "true_positives": 330
+      }
+    },
+    "presidio_gliner": {
+      "AADHAAR": {
+        "f1": 0.9870388833499502,
+        "false_negatives": 0,
+        "false_positives": 13,
+        "precision": 0.9744094488188977,
+        "recall": 1.0,
+        "support": 495,
+        "true_positives": 495
+      },
+      "ADDRESS": {
+        "f1": 0.9855072463768116,
+        "false_negatives": 3,
+        "false_positives": 5,
+        "precision": 0.9819494584837545,
+        "recall": 0.9890909090909091,
+        "support": 275,
+        "true_positives": 272
+      },
+      "CARD": {
+        "f1": 1.0,
+        "false_negatives": 0,
+        "false_positives": 0,
+        "precision": 1.0,
+        "recall": 1.0,
+        "support": 330,
+        "true_positives": 330
+      },
+      "EMAIL": {
+        "f1": 1.0,
+        "false_negatives": 0,
+        "false_positives": 0,
+        "precision": 1.0,
+        "recall": 1.0,
+        "support": 330,
+        "true_positives": 330
+      },
+      "IFSC": {
+        "f1": 1.0,
+        "false_negatives": 0,
+        "false_positives": 0,
+        "precision": 1.0,
+        "recall": 1.0,
+        "support": 165,
+        "true_positives": 165
+      },
+      "ORG": {
+        "f1": 0.616530156366344,
+        "false_negatives": 26,
+        "false_positives": 489,
+        "precision": 0.4584717607973422,
+        "recall": 0.9409090909090909,
+        "support": 440,
+        "true_positives": 414
+      },
+      "PAN": {
+        "f1": 1.0,
+        "false_negatives": 0,
+        "false_positives": 0,
+        "precision": 1.0,
+        "recall": 1.0,
+        "support": 330,
+        "true_positives": 330
+      },
+      "PERSON": {
+        "f1": 0.7471042471042472,
+        "false_negatives": 51,
+        "false_positives": 473,
+        "precision": 0.6206896551724138,
+        "recall": 0.9381818181818182,
+        "support": 825,
+        "true_positives": 774
+      },
+      "PHONE": {
+        "f1": 0.9685534591194969,
+        "false_negatives": 0,
+        "false_positives": 25,
+        "precision": 0.9390243902439024,
+        "recall": 1.0,
+        "support": 385,
+        "true_positives": 385
+      },
+      "UPI": {
+        "f1": 1.0,
+        "false_negatives": 0,
+        "false_positives": 0,
+        "precision": 1.0,
+        "recall": 1.0,
+        "support": 330,
+        "true_positives": 330
+      },
+      "VEHICLE_REG": {
+        "f1": 1.0,
+        "false_negatives": 0,
+        "false_positives": 0,
+        "precision": 1.0,
+        "recall": 1.0,
+        "support": 330,
+        "true_positives": 330
+      }
+    },
+    "presidio_stock": {
+      "AADHAAR": {
+        "f1": 0.0,
+        "false_negatives": 495,
+        "false_positives": 0,
+        "precision": 0.0,
+        "recall": 0.0,
+        "support": 495,
+        "true_positives": 0
+      },
+      "ADDRESS": {
+        "f1": 0.0,
+        "false_negatives": 275,
+        "false_positives": 0,
+        "precision": 0.0,
+        "recall": 0.0,
+        "support": 275,
+        "true_positives": 0
+      },
+      "CARD": {
+        "f1": 1.0,
+        "false_negatives": 0,
+        "false_positives": 0,
+        "precision": 1.0,
+        "recall": 1.0,
+        "support": 330,
+        "true_positives": 330
+      },
+      "EMAIL": {
+        "f1": 1.0,
+        "false_negatives": 0,
+        "false_positives": 0,
+        "precision": 1.0,
+        "recall": 1.0,
+        "support": 330,
+        "true_positives": 330
+      },
+      "IFSC": {
+        "f1": 0.0,
+        "false_negatives": 165,
+        "false_positives": 0,
+        "precision": 0.0,
+        "recall": 0.0,
+        "support": 165,
+        "true_positives": 0
+      },
+      "ORG": {
+        "f1": 0.0,
+        "false_negatives": 440,
+        "false_positives": 0,
+        "precision": 0.0,
+        "recall": 0.0,
+        "support": 440,
+        "true_positives": 0
+      },
+      "PAN": {
+        "f1": 0.0,
+        "false_negatives": 330,
+        "false_positives": 0,
+        "precision": 0.0,
+        "recall": 0.0,
+        "support": 330,
+        "true_positives": 0
+      },
+      "PERSON": {
+        "f1": 0.4835079549864183,
+        "false_negatives": 202,
+        "false_positives": 1129,
+        "precision": 0.3555936073059361,
+        "recall": 0.7551515151515151,
+        "support": 825,
+        "true_positives": 623
+      },
+      "PHONE": {
+        "f1": 0.9685534591194969,
+        "false_negatives": 0,
+        "false_positives": 25,
+        "precision": 0.9390243902439024,
+        "recall": 1.0,
+        "support": 385,
+        "true_positives": 385
+      },
+      "UPI": {
+        "f1": 0.0,
+        "false_negatives": 330,
+        "false_positives": 0,
+        "precision": 0.0,
+        "recall": 0.0,
+        "support": 330,
+        "true_positives": 0
+      },
+      "VEHICLE_REG": {
+        "f1": 0.0,
+        "false_negatives": 330,
+        "false_positives": 0,
+        "precision": 0.0,
+        "recall": 0.0,
+        "support": 330,
+        "true_positives": 0
+      }
+    }
+  },
+  "commit": "cb0e7f219496fcfb7565108139ef0abc6f3f8b1e",
+  "dataset_size": 2860
+}
