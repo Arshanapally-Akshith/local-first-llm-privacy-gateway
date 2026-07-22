@@ -2557,3 +2557,351 @@ detector issue — every component involved behaved correctly in
 isolation — so the disposition is the third, unnamed-but-implied case:
 document a real, correctly-behaving-components-composing-imperfectly
 finding, and change nothing.
+
+---
+
+## 2026-07-22 - Phase 6: adversarial suite runs against the live gateway, not `cascade.detect()` — and its success criterion requires proof of substitution, not mere disappearance
+
+**Decision.** Unlike `benchmarks/arms/ours.py` (Phase 5's arm 4, which
+calls `src/detect/cascade.py::detect()` directly), every case in
+`adversarial/` sends a real HTTP request through the real `app` and
+inspects what the mock upstream actually received, via a shared
+`CapturingTransport` (see the separate entry below on promoting it out
+of three duplicated test-local copies). A case is scored `caught` only
+if all three hold, computed by `adversarial/cases/verify.py`'s three
+verifier builders:
+
+1. the captured upstream body is still valid JSON,
+2. the original sensitive value is absent from it, and
+3. something demonstrably *replaced* it — for the seven slot-based
+   bypass classes, proven by requiring the text immediately
+   surrounding the entity's known position to be byte-identical to
+   what was sent, while the text between those two anchors changed to
+   something that is not the value that was actually sent.
+
+**Alternatives considered.**
+- **"Needle disappeared" alone** (the suite's own first draft): reusing
+  `benchmarks/arms/ours.py`'s in-process pattern and simply asserting
+  the real value is absent from the captured body. Rejected on
+  independent Staff Engineer review: disappearance alone cannot
+  distinguish a real substitution from a truncation, a blanket
+  redaction, or any other corruption that also happens to remove the
+  literal substring — none of which is evidence that sanitization, specifically,
+  occurred.
+- **Hardcode the expected surrogate value or format and compare
+  directly**: rejected — CLAUDE.md's own domain-type philosophy and
+  ARCHITECTURE.md's frozen FF1/candidate-pool design mean the surrogate
+  *scheme* could change; a check that assumes today's exact surrogate
+  shape would silently stop meaning anything the day that scheme
+  evolves, and would also require this suite to duplicate knowledge of
+  the surrogate engine it has no business knowing.
+- **In-process `cascade.detect()` calls, mirroring the benchmark's own
+  arm 4** (chosen approach, rejected for this suite specifically):
+  ARCHITECTURE.md's Adversarial Evaluation section states plainly that
+  bypasses like split-across-turns and PII-as-a-JSON-key "only exist at
+  the system level" — `field_walker.py`'s per-message, per-field
+  traversal and the OpenAI wire format's full-history-per-request shape
+  are properties of the *proxy*, not of any single call to `detect()`.
+  An in-process call cannot exercise either mechanism at all.
+
+**Why the chosen design (both parts) is correct.** The prefix/suffix
+invariance check is a generic, surrogate-implementation-agnostic proof
+of *targeted substitution* — it says nothing about what replaced the
+value, only that the known carrier text on both sides is untouched and
+the middle changed to something new. This is the same "do not hardcode
+specific surrogate values" requirement the Staff Engineer review stated
+explicitly. The two structural-isolation classes
+(`split_across_turns`, `pii_in_json_key`) cannot use this check at all
+— there is no single slot to anchor around, because the entity was
+never assembled contiguously by construction — so their own
+verifiers (`fragment_reconstruction()`, `key_presence()`) measure the
+only honest signal available: whether the mechanism that should have
+prevented reconstruction (or key-visibility) actually did.
+
+**A real, contained bug this design caught before any case ran for
+real.** An earlier draft of `verify.slot_replacement()` compared the
+surviving middle text against `real_value` (the always-plaintext
+canonical entity) rather than `sent_value` (the literal text actually
+embedded — obfuscated, for most adversarial cases). Since
+`sent_value != real_value` by construction for an obfuscated case, an
+*untouched* obfuscated value would have read as "changed" purely
+because it doesn't equal `real_value`, silently inverting the very
+success criterion this entry describes. Caught by reasoning through the
+first live-gateway run before trusting its output, not discovered by
+accident; fixed in `verify.slot_replacement()` and `carrier.build_slot_case()`
+before any case's result was recorded, with a regression test
+(`tests/unit/test_adversarial_carrier.py::test_build_slot_case_verifier_uses_sent_value_not_real_value_for_replacement_check`).
+
+---
+
+## 2026-07-22 - Phase 6: bypass-class discovery via a `build_cases()` convention, not an import list
+
+**Decision.** `adversarial/cases/discovery.py::discover_cases()` walks
+`adversarial/cases/` at runtime (`pkgutil.iter_modules`) and calls
+`build_cases()` on every module that defines it. Infrastructure modules
+(`case_types`, `verify`, `carrier`, `discovery` itself) are skipped
+because they simply have no `build_cases()` — there is no separate
+allowlist/denylist of module names to maintain.
+
+**Alternatives considered.**
+- **A growing import list in the runner** (this suite's own first
+  draft, and `benchmarks/runner/run.py::_ARM_FACTORIES`'s actual
+  pattern for its four, fixed, hand-designed arms): rejected on
+  independent Staff Engineer review specifically for this suite — nine
+  bypass classes today, with BUILD.md's own framing ("8-10 bypass
+  classes") anticipating more, is exactly the shape where a manually
+  maintained list becomes the thing every new class's PR has to
+  remember to touch. The benchmark's four arms are a fixed, permanent
+  ablation design (BUILD.md names all four explicitly); this suite's
+  bypass classes are the opposite — an intentionally open-ended,
+  growing catalogue — so the two runners' own registration mechanisms
+  are allowed to differ.
+- **A decorator-based explicit registry** (`@register_bypass_class`):
+  rejected — still requires every module to be *imported* somewhere for
+  the decorator to run, which either reintroduces an import list in
+  `adversarial/cases/__init__.py` or requires the same `pkgutil`-based
+  walk anyway, at which point the decorator adds ceremony without
+  removing the growing-list problem it was meant to solve.
+
+**Why.** Mirrors `src/detect/registry.py`'s own justification, quoted
+directly in `discovery.py`'s docstring: "adding an entity type is a new
+detector registered in a registry, not an `if` branch in the pipeline."
+Applied here: adding a bypass class is a new module with a
+`build_cases()` function, not a new line anywhere else.
+
+---
+
+## 2026-07-22 - Phase 6: single-bypass scope; combined obfuscations are out of scope
+
+**Decision.** Every case in this suite applies exactly one obfuscation
+technique. Combinations (base64 + zero-width, split-across-turns +
+homoglyph, or any other pairing of two classes in this suite) are not
+measured, are stated as out of scope in the runner's own rendered
+output (`adversarial/runner/run.py::_SCOPE_NOTE`, present in every
+generated `latest.md`), and in this entry, so a future contributor
+cannot mistake this suite's coverage for something broader than what
+was actually measured.
+
+**Alternatives considered.**
+- **Also measure a handful of hand-picked combinations**: rejected for
+  this phase — BUILD.md's own Phase 6 scope names nine specific,
+  independent bypass classes, not a combinatorial matrix over them;
+  attempting even a "representative sample" of combinations would be
+  unbounded scope creep with no natural stopping point (2^9 possible
+  subsets), and CLAUDE.md's Forbidden Actions list rules out adding
+  unrequested scope mid-phase.
+- **Say nothing and let the single-bypass table speak for itself**:
+  rejected — ARCHITECTURE.md's own reasoning for the blind red-team
+  step applies equally here: an unstated assumption a future reader
+  could reasonably make ("this covers combined attacks too") is exactly
+  the kind of gap this project's own honesty standard exists to close
+  before a reviewer finds it.
+
+**Why.** Single-bypass measurement is the honest, in-scope claim; a
+combined-attack suite is real future work with its own design
+questions (which pairings are representative? does a combination need
+its own verifier shape?) that this phase does not have room to answer
+without compressing the nine classes BUILD.md actually asked for.
+
+---
+
+## 2026-07-22 - Phase 6: `CapturingTransport` promoted out of three duplicated test-local copies
+
+**Decision.** `tests/integration/test_sanitize_integration.py`,
+`test_phase_3_gate.py`, and `test_phase_4_gate.py` each defined their
+own private `_CapturingTransport` class and
+`_override_with_capturing_mock_upstream()` helper before this phase —
+`test_phase_3_gate.py`'s own comment on the class read "duplicated
+locally rather than imported: it is test plumbing... each integration
+test module already keeps its own copy." Promoted now to
+`adversarial/runner/gateway_client.py` (public `CapturingTransport`,
+`override_with_capturing_mock_upstream()`, and a context-manager form
+`capturing_mock_upstream()` for non-pytest callers), and all three
+existing test modules now import it from there instead.
+
+**Why now, reversing an explicit prior decision.** CLAUDE.md's own
+refactor policy: "duplication has actually appeared (twice is a
+coincidence; three times is a refactor)." Three copies already existed
+before this phase touched anything. More importantly, this phase's own
+runner (`adversarial/runner/run.py`, invoked standalone via
+`python -m adversarial.runner.run`, never through pytest) needs the
+identical mechanism as its *core execution strategy* — ARCHITECTURE.md
+requires every case to run "against the live gateway" and inspect "what
+the upstream actually received," which is exactly what
+`CapturingTransport` gives a caller. A fourth private copy inside
+`adversarial/` would have been the same duplication the prior decision
+already flagged as acceptable at three, now grown to four for no
+reason other than habit.
+
+**Why it lives under `adversarial/runner/`, not `tests/support/`.** The
+runner is not a test — it is production-quality evaluation code
+(CLAUDE.md: "benchmark and adversarial runners are code, and they get
+tested too") invoked directly by `tasks.ps1 adversarial`. Placing the
+shared module under `tests/` would invert this codebase's own layering
+convention (tests import production code; production code is never
+imported from `tests/`). Tests continue to import it from
+`adversarial.runner.gateway_client`, the same way they already import
+from `benchmarks.arms.arm` and other sibling top-level packages.
+
+**Verified non-regressive.** All three refactored test modules were
+re-run immediately after the change (`test_sanitize_integration.py`,
+`test_phase_3_gate.py` in the fast suite; `test_phase_4_gate.py` under
+`-m real_model`) and passed unchanged, before any new Phase 6 code was
+written on top of the shared module.
+
+---
+
+## 2026-07-22 - Phase 6: discovered — Tier-2 can misclassify a message's literal `role` value as `PERSON`, corrupting the OpenAI role enum; documented, not fixed this phase
+
+**What was found.** Running many varied real-`GLiNER` requests through
+the live gateway for the first time with the *entire* captured upstream
+body scrutinized (not just `message.content`, which is all any earlier
+real-model test asserted on) surfaced a real, reproducible defect in
+already-shipped Phase 4 code: `get_tier2_model().find_entities("user")`
+returns a `PERSON` match spanning the whole 4-character string, with no
+surrounding context. `src/pipeline/field_walker.py::_walk()` treats
+every string-valued field generically, including a message's `"role"`
+field — nothing special-cases it — so `sanitize()` can replace a
+message's literal `"role": "user"` with a fabricated person-name
+surrogate (observed directly, e.g. `{"role": "Krishna Chowdhury",
+"content": "..."}` forwarded to the mock upstream). This corrupts a
+value the OpenAI wire format requires to be one of a fixed enum
+(`system`/`user`/`assistant`/`tool`), independent of anything this
+project's own adversarial or benchmark work is trying to measure.
+
+**Why this is not a Phase 6 finding, and not fixed here.** This is a
+real correctness defect in the ordinary, non-adversarial request path
+— any request through this gateway with Tier-2 enabled has a nonzero
+chance of a corrupted `role` field, entirely independent of whether the
+request contains a deliberate bypass attempt. It is out of Phase 6's
+scope (the adversarial suite) to fix a Phase 4 pipeline bug, and
+CLAUDE.md's Forbidden Actions list rules out unrequested architecture
+or pipeline changes mid-phase. Surfaced to the product owner directly
+before continuing Phase 6 work (per this project's own decision-making
+protocol: "root-cause every unexpected result before changing code");
+the product owner's explicit choice was to document and continue,
+deferring a fix to its own future task.
+
+**Why it does not invalidate any Phase 6 measurement.** Every verifier
+in `adversarial/cases/verify.py` checks specific, known field paths
+(`content`, an `arguments` sub-key) directly via `_get_at_path()` —
+never a fuzzy whole-body substring search for an unrelated field's
+corruption to interfere with. The corrupted `role` field was observed
+in the same captured bodies this suite's own cases used, and confirmed
+by direct inspection not to change any case's `caught` verdict.
+
+**Residual, for `docs/LIMITATIONS.md`.** See that file's own new entry
+for the user-facing statement of this gap.
+
+---
+
+## 2026-07-22 - Phase 6: a genuine, measured contradiction in `transliterated_names` — GLiNER recognises Devanagari-script names in this suite's own test pairs, against this module's own a priori prediction
+
+**What was measured.** `adversarial/cases/transliterated_names.py`
+predicted `expected_outcome="leaked"` for both Devanagari name pairs,
+reasoning from `docs/LIMITATIONS.md`'s already-disclosed GLiNER
+weakness on *romanized* Hinglish carrier sentences. The actual measured
+result (`adversarial/results/latest.md`, "Prediction mismatches"): both
+pairs were in fact caught — `urchade/gliner_multi_pii-v1`'s
+multilingual training recognises native Devanagari script well enough,
+at least for these two examples, to contradict the prediction.
+
+**Disposition: left as a reported mismatch, not corrected.**
+`expected_outcome` was not changed to `"caught"` after seeing this
+result. The entire point of recording a prediction before measuring is
+that the runner's own "Prediction mismatches" section
+(`adversarial/runner/run.py::render_markdown()`) stays honest about
+what was predicted versus what was found — retroactively editing the
+prediction to match the outcome would be indistinguishable from "tuning
+until the result looks good," which CLAUDE.md rules out even implicitly
+("Never... change the span-matching criterion after seeing results" —
+the same principle applied here to a bypass-class prediction instead of
+a scoring criterion).
+
+**A separate, unrelated bug this same investigation caught and fixed.**
+The first real-model run also showed the module's own *clean* cases
+mismatching (`expected_outcome="caught"`, measured `caught=False`) for
+a reason that turned out to be unrelated to transliteration at all: the
+original carrier suffix ("... regarding their account.") gave GLiNER a
+separate, ordinary word ("account") it sometimes misread as an `ORG`,
+which broke this case's own prefix/suffix invariance check
+(`verify.slot_replacement()`) for a reason having nothing to do with
+the name being tested. Root-caused by direct inspection of the captured
+body, confirmed against the real model with an alternative suffix
+before committing to it, and fixed by choosing carrier text verified
+not to trigger a false positive — a test-design fix, not a change to
+what is being measured or predicted.
+
+---
+
+## 2026-07-22 - Phase 6 release-readiness pass: deterministic discovery order, and removing the one real source of non-reproducibility in the committed artifact
+
+**What an independent release-readiness review required.** Two checks
+before tagging: that `discover_cases()` executes in a deterministic
+order (so `adversarial/results/latest.json`/`latest.md` are
+reproducible across operating systems and CI runs), and that
+re-running the committed runner actually reproduces those two files.
+
+**Finding 1 — module iteration order was never guaranteed.**
+`pkgutil.iter_modules()` reflects whatever order the underlying
+filesystem finder enumerates directory entries in, which is not
+guaranteed identical across operating systems (observed, not assumed:
+Windows and Linux directory listings are not required to agree) or
+across Python versions. Fixed in `discovery.py::discover_cases()` with
+two independent guards, not one: modules are imported in
+sorted-by-name order, and — the guard that actually matters for the
+artifact's own byte-reproducibility, since `json.dumps(...,
+sort_keys=True)` sorts dict keys but never reorders a JSON list — the
+final case list is sorted by `case_id` before being returned,
+regardless of which module or what order produced it.
+
+**Finding 2 (more significant) — the report was never actually
+reproducible, for a reason unrelated to discovery order at all.** Two
+back-to-back runs of `python -m adversarial.runner.run` were diffed
+directly (not assumed identical) and found to differ: every
+`transliterated_names` case's `detail` field reported a different
+`substituted span length=N`. Root cause: `src/session/rng.py::get_rng()`
+deliberately returns a fresh, **unseeded** `random.Random()` per
+request (a Phase 4 decision, documented in that module's own docstring,
+made for a real reason — a single shared RNG object across concurrent
+sessions would be a genuine thread-safety bug). `PERSON` surrogates are
+drawn from a candidate pool using this RNG
+(`Session.allocate_or_lookup_name()`), so which candidate name gets
+chosen — and therefore its length — genuinely varies run to run. This
+is the only place in the entire suite where a case's outcome touches
+anything non-deterministic: every Tier-1 (FF1) surrogate is
+format-preserving and same-length by construction, so only the one
+Tier-2/PERSON bypass class was ever affected.
+
+**Alternatives considered.**
+- **Override `get_rng()` in the runner with a seeded instance**:
+  rejected — `get_rng()`'s own unseeded-per-request design is a frozen,
+  already-decided Phase 4 concurrency property (CLAUDE.md: "never
+  change architecture for optimisation" applies equally to changing it
+  for a Phase 6 convenience); overriding it would mean this suite's
+  "live gateway" runs are no longer actually exercising the same
+  dependency-injection path the real gateway uses, undermining
+  ARCHITECTURE.md's own reason for requiring live-gateway execution in
+  the first place.
+- **Accept the non-reproducibility as a known, disclosed limitation**:
+  rejected — the variation was in a field this suite's own code writes
+  (`detail`), not a property of the gateway being measured; the
+  gateway's own actual behaviour (name-map allocation) is exactly as
+  non-deterministic as Phase 4 already decided it should be, but
+  nothing about *that* required this suite's own diagnostic text to
+  encode a length that inherits the variation.
+- **Stop embedding the substituted span's length in `detail` at all**
+  (chosen): `verify.slot_replacement()`'s success-path message changed
+  from `f"substituted span length={len(middle)}"` to a fixed string
+  ("prefix/suffix invariant held; sent value replaced" /
+  "... unchanged") — evidence of *whether* a targeted substitution
+  occurred, with no dependency on what the substitute happens to look
+  like. This is consistent with the criterion's own design intent
+  (`docs/DECISIONS.md`, the "needle disappeared" entry above): the
+  proof is structural (prefix/suffix invariance), never a property of
+  the surrogate's own shape.
+
+**Verified, not assumed.** `python -m adversarial.runner.run` was run
+three consecutive times after the fix; `latest.json` and `latest.md`
+were byte-identical across all three (`diff` exit 0). Fast and
+`real_model` suites re-run in full afterward with no regressions.

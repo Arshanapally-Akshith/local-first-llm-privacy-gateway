@@ -88,6 +88,66 @@ with certainty*." Measuring which obfuscations bypass detection is
 explicitly Phase 6's job (the adversarial suite); Phase 2 does not
 attempt to close this gap.
 
+**Measured in Phase 6** (`adversarial/results/latest.md`, regenerate
+with `.\tasks.ps1 adversarial`): 8 of the suite's 9 bypass classes —
+spaced digits, number-words, base64, PII embedded in code, PII as a
+JSON key, split-across-turns, Unicode homoglyphs, zero-width
+characters — measured at 100% adversarial leak rate (0% recall) against
+every entity type they were tested on, exactly as this entry predicted.
+The ninth class, transliterated names, is Tier-2/GLiNER-based rather
+than a Tier-1 regex property, and its measured result contradicted this
+suite's own prediction: `urchade/gliner_multi_pii-v1` recognised both
+tested Devanagari-script name pairs, where a leak was expected based on
+this project's already-documented Hinglish-romanization weakness (see
+`docs/DECISIONS.md`, 2026-07-22, "a genuine, measured contradiction in
+`transliterated_names`"). Every unfixed bypass, per class and per
+entity type, is listed in `adversarial/results/latest.md`'s "Bypasses
+that still work" section — none are hidden or removed.
+
+**Scope of this measurement, stated plainly.** Every case above applies
+exactly one obfuscation technique. Combinations (e.g. base64 together
+with zero-width characters, or split-across-turns together with a
+homoglyph) have not been measured and must not be assumed to behave the
+same as either technique alone — see `docs/DECISIONS.md`, 2026-07-22,
+"single-bypass scope."
+
+---
+
+## Tier-2 can misclassify a message's literal `role` field as `PERSON`, corrupting the OpenAI role enum
+
+**Phase 4 (gap present since Tier-2 was wired in). Discovered in Phase
+6, documented here, not fixed.**
+
+`get_tier2_model().find_entities("user")` returns a `PERSON` match
+spanning the entire string — a context-free, 4-character token is
+exactly the input zero-shot NER is least reliable on.
+`src/pipeline/field_walker.py::_walk()` treats every string-valued
+field the same way, including a chat message's `"role"` field (nothing
+special-cases it), so `sanitize()` can replace a message's literal
+`"role": "user"` with a fabricated person-name surrogate — observed
+directly during Phase 6's own live-gateway test runs, e.g. a captured
+upstream body containing `{"role": "Krishna Chowdhury", "content":
+"..."}`. This corrupts a value the OpenAI wire format requires to be one
+of a fixed enum (`system`/`user`/`assistant`/`tool`), and is unrelated
+to any deliberate bypass attempt — it can occur on an entirely ordinary
+request whenever Tier-2 happens to misfire on the bare role string.
+
+**Why this is disclosed here rather than fixed.** This is a real
+defect in the already-shipped, non-adversarial request path, discovered
+incidentally by Phase 6's methodology (the first test work to scrutinize
+an entire captured request body against real Tier-2 inference, rather
+than only a message's `content`). Fixing it is out of Phase 6's own
+scope (the adversarial suite, not a Phase 4 pipeline change), and was
+explicitly deferred by the product owner on being reported — see
+`docs/DECISIONS.md`, 2026-07-22, for the full root-cause and the
+decision to document rather than fix immediately.
+
+**Does not invalidate any Phase 6 measurement.** Every verifier in
+`adversarial/cases/verify.py` checks specific, known field paths
+directly, never a fuzzy whole-body search that this corruption could
+interfere with — confirmed by direct inspection that no case's `caught`
+verdict was affected by it.
+
 ---
 
 ## No unstructured-entity detection yet (names, organizations, addresses) — resolved
