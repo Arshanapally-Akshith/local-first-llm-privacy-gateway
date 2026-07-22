@@ -35,6 +35,10 @@ import httpx
 import pytest
 from fastapi.testclient import TestClient
 
+from adversarial.runner.gateway_client import (
+    CapturingTransport,
+    override_with_capturing_mock_upstream,
+)
 from app.main import app
 from src.core.types import EntityType, SessionId
 from src.detect.tier1.checksum import verhoeff_generate_check_digit
@@ -46,14 +50,8 @@ from src.session.store import get_session_store
 _PERSON: EntityType = "PERSON"
 
 
-def _override_with_capturing_mock_upstream() -> "_CapturingTransport":
-    capturing = _CapturingTransport(httpx.ASGITransport(app=mock_app))
-
-    def _get_client() -> httpx.AsyncClient:
-        return httpx.AsyncClient(transport=capturing, base_url="http://mock-upstream")
-
-    app.dependency_overrides[get_upstream_client] = _get_client
-    return capturing
+def _override_with_capturing_mock_upstream() -> CapturingTransport:
+    return override_with_capturing_mock_upstream(app, mock_app)
 
 
 def _override_with_mock_upstream() -> None:
@@ -69,21 +67,6 @@ def _override_with_mock_upstream() -> None:
 def _clear_overrides() -> Iterator[None]:
     yield
     app.dependency_overrides.pop(get_upstream_client, None)
-
-
-class _CapturingTransport(httpx.AsyncBaseTransport):
-    """See `test_sanitize_integration.py` — same technique, duplicated
-    locally rather than imported: it is test plumbing, not production
-    logic, and each integration test module already keeps its own copy
-    of this exact class."""
-
-    def __init__(self, inner: httpx.AsyncBaseTransport) -> None:
-        self._inner = inner
-        self.captured_bodies: list[bytes] = []
-
-    async def handle_async_request(self, request: httpx.Request) -> httpx.Response:
-        self.captured_bodies.append(request.content)
-        return await self._inner.handle_async_request(request)
 
 
 def _parse_sse_content(raw: str) -> str:

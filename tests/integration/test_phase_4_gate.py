@@ -29,6 +29,7 @@ import httpx
 import pytest
 from fastapi.testclient import TestClient
 
+from adversarial.runner.gateway_client import CapturingTransport, override_with_capturing_mock_upstream
 from app.main import app
 from src.core.logging import PiiSafeFormatter
 from src.detect.tier2.gliner_model import get_tier2_model
@@ -47,27 +48,8 @@ _CONTENT = (
 )
 
 
-class _CapturingTransport(httpx.AsyncBaseTransport):
-    """Same technique as `test_phase_3_gate.py`/`test_sanitize_integration.py`
-    — records every request body that actually crossed to "upstream"."""
-
-    def __init__(self, inner: httpx.AsyncBaseTransport) -> None:
-        self._inner = inner
-        self.captured_bodies: list[bytes] = []
-
-    async def handle_async_request(self, request: httpx.Request) -> httpx.Response:
-        self.captured_bodies.append(request.content)
-        return await self._inner.handle_async_request(request)
-
-
-def _override_with_capturing_mock_upstream() -> _CapturingTransport:
-    capturing = _CapturingTransport(httpx.ASGITransport(app=mock_app))
-
-    def _get_client() -> httpx.AsyncClient:
-        return httpx.AsyncClient(transport=capturing, base_url="http://mock-upstream")
-
-    app.dependency_overrides[get_upstream_client] = _get_client
-    return capturing
+def _override_with_capturing_mock_upstream() -> CapturingTransport:
+    return override_with_capturing_mock_upstream(app, mock_app)
 
 
 @pytest.fixture(autouse=True)

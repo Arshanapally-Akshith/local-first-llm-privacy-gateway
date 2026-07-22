@@ -11,10 +11,10 @@ automated stand-in for a human running the manual curl gate.
 import json
 from collections.abc import Iterator
 
-import httpx
 import pytest
 from fastapi.testclient import TestClient
 
+from adversarial.runner.gateway_client import CapturingTransport, override_with_capturing_mock_upstream
 from app.main import app
 from src.detect.tier1.checksum import verhoeff_generate_check_digit
 from src.mock_upstream.main import app as mock_app
@@ -25,29 +25,8 @@ _VALID_AADHAAR = _PAYLOAD + verhoeff_generate_check_digit(_PAYLOAD)
 _VALID_PAN = "AAAPL1234C"
 
 
-class _CapturingTransport(httpx.AsyncBaseTransport):
-    """Wraps the mock upstream's own ASGITransport and records every
-    request body that passes through it, so a test can assert on
-    exactly what "left the gateway" — not just what the mock chose to
-    echo back."""
-
-    def __init__(self, inner: httpx.AsyncBaseTransport) -> None:
-        self._inner = inner
-        self.captured_bodies: list[bytes] = []
-
-    async def handle_async_request(self, request: httpx.Request) -> httpx.Response:
-        self.captured_bodies.append(request.content)
-        return await self._inner.handle_async_request(request)
-
-
-def _override_with_capturing_mock_upstream() -> _CapturingTransport:
-    capturing = _CapturingTransport(httpx.ASGITransport(app=mock_app))
-
-    def _get_client() -> httpx.AsyncClient:
-        return httpx.AsyncClient(transport=capturing, base_url="http://mock-upstream")
-
-    app.dependency_overrides[get_upstream_client] = _get_client
-    return capturing
+def _override_with_capturing_mock_upstream() -> CapturingTransport:
+    return override_with_capturing_mock_upstream(app, mock_app)
 
 
 @pytest.fixture(autouse=True)
