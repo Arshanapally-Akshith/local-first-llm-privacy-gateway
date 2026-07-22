@@ -29,3 +29,6 @@ htmlcov/
 # Windows
 Thumbs.db
 desktop.ini
+
+# Generated adversarial evaluation outputs
+adversarial/results/
