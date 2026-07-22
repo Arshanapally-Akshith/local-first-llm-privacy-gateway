@@ -11,14 +11,20 @@ digits, 1 letter — canonical, unobfuscated, uppercase form only.
 Spaced/lowercase/OCR-noisy forms are out of scope for this detector
 (see class docstring)."""
 
-_CATEGORY_LETTERS: Final[frozenset[str]] = frozenset("PCHABGJLFT")
+PAN_CATEGORY_LETTERS: Final[frozenset[str]] = frozenset("PCHABGJLFT")
 """The Income Tax Department's documented 4th-character holder-category
 codes (Individual, Company, HUF, AOP, BOI, Government, Artificial
 Judicial Person, Local Authority, Firm/LLP, Trust). Unlike Aadhaar/Card,
 PAN has no published arithmetic check digit — this membership check is
 the structural equivalent: it is what separates real evidence from any
 5-letters+4-digits+1-letter string, the same role Verhoeff/Luhn play
-for Aadhaar/Card."""
+for Aadhaar/Card.
+
+Public (not module-private) so the Phase 5 benchmark generator
+(`benchmarks/generate/entity_values.py`) can construct synthetic,
+structurally-valid PANs from the same documented set this detector
+validates against, rather than restating the ten letters as a second,
+driftable copy (CLAUDE.md: "no duplicated logic")."""
 
 
 class PanDetector:
@@ -43,7 +49,7 @@ class PanDetector:
         spans: list[Span] = []
         for match in _CANDIDATE_PATTERN.finditer(text):
             candidate = match.group()
-            if candidate[3] in _CATEGORY_LETTERS:
+            if candidate[3] in PAN_CATEGORY_LETTERS:
                 spans.append(
                     Span(
                         start=Offset(match.start()),
