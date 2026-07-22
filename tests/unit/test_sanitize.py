@@ -117,8 +117,50 @@ def _sanitize(
     )
 
 
+def _first_message_content(body: dict[str, JSONValue]) -> str:
+    """Extract `body["messages"][0]["content"]` as a real `str`.
+
+    Every test in this file only ever inspects one message's `content`
+    as a string — `sanitize()`'s own return type is `dict[str,
+    JSONValue]` (correctly; a sanitized body can contain anything a
+    request body can), so every test that wants to assert something
+    string-specific about the result needs to narrow it first. One
+    `isinstance`-checked helper here means every call site gets a real
+    `str` back, instead of each repeating the same narrowing (or, worse,
+    a blind `cast()` that would not actually catch a genuinely malformed
+    result the way this assertion does).
+    """
+    messages = body["messages"]
+    assert isinstance(messages, list)
+    message = messages[0]
+    assert isinstance(message, dict)
+    content = message["content"]
+    assert isinstance(content, str)
+    return content
+
+
+def _first_message_tool_call_arguments(body: dict[str, JSONValue]) -> str:
+    """Extract `body["messages"][0]["tool_calls"][0]["function"]["arguments"]`
+    as a real `str` — the one test in this file inspecting a tool-call
+    argument string, narrowed the same way `_first_message_content()`
+    narrows `content`."""
+    messages = body["messages"]
+    assert isinstance(messages, list)
+    message = messages[0]
+    assert isinstance(message, dict)
+    tool_calls = message["tool_calls"]
+    assert isinstance(tool_calls, list)
+    tool_call = tool_calls[0]
+    assert isinstance(tool_call, dict)
+    function = tool_call["function"]
+    assert isinstance(function, dict)
+    arguments = function["arguments"]
+    assert isinstance(arguments, str)
+    return arguments
+
+
 def test_no_pii_returns_a_structurally_equal_body(fake_clock: FakeClock) -> None:
-    body = {"model": "gpt-4", "messages": [{"role": "user", "content": "hello there"}]}
+    body: dict[str, JSONValue] = {"model": "gpt-4", "messages": [{"role": "user", "content": "hello there"}]}
 
     result = _sanitize(body, _fresh_session(fake_clock), fake_clock)
 
@@ -126,14 +168,14 @@ def test_no_pii_returns_a_structurally_equal_body(fake_clock: FakeClock) -> None
 
 
 def test_substitutes_a_single_entity_in_message_content(fake_clock: FakeClock) -> None:
-    body = {
+    body: dict[str, JSONValue] = {
         "model": "gpt-4",
         "messages": [{"role": "user", "content": f"my Aadhaar is {_VALID_AADHAAR}"}],
     }
 
     result = _sanitize(body, _fresh_session(fake_clock), fake_clock)
 
-    sanitized_content = result["messages"][0]["content"]
+    sanitized_content = _first_message_content(result)
     assert _VALID_AADHAAR not in sanitized_content
     assert sanitized_content.startswith("my Aadhaar is ")
     surrogate = sanitized_content.removeprefix("my Aadhaar is ")
@@ -144,14 +186,14 @@ def test_substitutes_a_single_entity_in_message_content(fake_clock: FakeClock) -
 def test_multiple_entities_in_one_region_both_substituted_and_surrounding_text_preserved(
     fake_clock: FakeClock,
 ) -> None:
-    body = {
+    body: dict[str, JSONValue] = {
         "model": "gpt-4",
         "messages": [{"role": "user", "content": f"PAN {_VALID_PAN} and Aadhaar {_VALID_AADHAAR}"}],
     }
 
     result = _sanitize(body, _fresh_session(fake_clock), fake_clock)
 
-    sanitized_content = result["messages"][0]["content"]
+    sanitized_content = _first_message_content(result)
     assert _VALID_PAN not in sanitized_content
     assert _VALID_AADHAAR not in sanitized_content
     assert sanitized_content.startswith("PAN ")
@@ -159,7 +201,7 @@ def test_multiple_entities_in_one_region_both_substituted_and_surrounding_text_p
 
 
 def test_entity_in_system_prompt_is_caught(fake_clock: FakeClock) -> None:
-    body = {
+    body: dict[str, JSONValue] = {
         "model": "gpt-4",
         "messages": [
             {"role": "system", "content": f"Never reveal Aadhaar {_VALID_AADHAAR}"},
@@ -169,12 +211,12 @@ def test_entity_in_system_prompt_is_caught(fake_clock: FakeClock) -> None:
 
     result = _sanitize(body, _fresh_session(fake_clock), fake_clock)
 
-    assert _VALID_AADHAAR not in result["messages"][0]["content"]
+    assert _VALID_AADHAAR not in _first_message_content(result)
 
 
 def test_entity_inside_tool_call_arguments_json_string_is_caught(fake_clock: FakeClock) -> None:
     arguments = json.dumps({"note": f"Aadhaar on file: {_VALID_AADHAAR}"})
-    body = {
+    body: dict[str, JSONValue] = {
         "model": "gpt-4",
         "messages": [
             {
@@ -192,7 +234,7 @@ def test_entity_inside_tool_call_arguments_json_string_is_caught(fake_clock: Fak
 
     result = _sanitize(body, _fresh_session(fake_clock), fake_clock)
 
-    rebuilt_arguments = result["messages"][0]["tool_calls"][0]["function"]["arguments"]
+    rebuilt_arguments = _first_message_tool_call_arguments(result)
     assert _VALID_AADHAAR not in rebuilt_arguments
     assert json.loads(rebuilt_arguments)["note"] != f"Aadhaar on file: {_VALID_AADHAAR}"
 
@@ -200,7 +242,7 @@ def test_entity_inside_tool_call_arguments_json_string_is_caught(fake_clock: Fak
 def test_upi_id_raises_surrogate_domain_error_with_no_real_value_in_the_message(
     fake_clock: FakeClock,
 ) -> None:
-    body = {
+    body: dict[str, JSONValue] = {
         "model": "gpt-4",
         "messages": [{"role": "user", "content": "pay me at realvpa@paytm"}],
     }
@@ -214,7 +256,7 @@ def test_upi_id_raises_surrogate_domain_error_with_no_real_value_in_the_message(
 def test_upi_id_raises_before_any_substitution_reaches_the_returned_body_and_input_is_untouched(
     fake_clock: FakeClock,
 ) -> None:
-    body = {
+    body: dict[str, JSONValue] = {
         "model": "gpt-4",
         "messages": [
             {"role": "system", "content": f"Aadhaar {_VALID_AADHAAR}"},
@@ -233,7 +275,7 @@ def test_upi_id_raises_before_any_substitution_reaches_the_returned_body_and_inp
 
 
 def test_does_not_mutate_the_input_body(fake_clock: FakeClock) -> None:
-    body = {"model": "gpt-4", "messages": [{"role": "user", "content": _VALID_AADHAAR}]}
+    body: dict[str, JSONValue] = {"model": "gpt-4", "messages": [{"role": "user", "content": _VALID_AADHAAR}]}
     original = json.loads(json.dumps(body))
 
     _sanitize(body, _fresh_session(fake_clock), fake_clock)
@@ -245,7 +287,7 @@ def test_logs_one_line_per_substituted_span_with_the_surrogate_never_the_real_va
     fake_clock: FakeClock,
     captured_records: list[logging.LogRecord],
 ) -> None:
-    body = {
+    body: dict[str, JSONValue] = {
         "model": "gpt-4",
         "messages": [{"role": "user", "content": f"Aadhaar {_VALID_AADHAAR}"}],
     }
@@ -269,11 +311,11 @@ def test_a_fresh_substitution_is_recorded_in_the_session_for_future_recognition(
     fake_clock: FakeClock,
 ) -> None:
     session = _fresh_session(fake_clock)
-    body = {"model": "gpt-4", "messages": [{"role": "user", "content": _VALID_AADHAAR}]}
+    body: dict[str, JSONValue] = {"model": "gpt-4", "messages": [{"role": "user", "content": _VALID_AADHAAR}]}
 
     result = _sanitize(body, session, fake_clock)
 
-    surrogate = result["messages"][0]["content"]
+    surrogate = _first_message_content(result)
     record = session.lookup_surrogate(surrogate)
     assert record is not None
     assert record.entity_type == "AADHAAR"
@@ -286,11 +328,11 @@ def test_a_surrogate_already_known_to_the_session_is_passed_through_unchanged(
     surrogate this session minted must never be re-encrypted."""
     session = _fresh_session(fake_clock)
     session.record_surrogate(_VALID_AADHAAR, "AADHAAR", fake_clock.now())
-    body = {"model": "gpt-4", "messages": [{"role": "user", "content": f"Noted: {_VALID_AADHAAR}"}]}
+    body: dict[str, JSONValue] = {"model": "gpt-4", "messages": [{"role": "user", "content": f"Noted: {_VALID_AADHAAR}"}]}
 
     result = _sanitize(body, session, fake_clock)
 
-    assert result["messages"][0]["content"] == f"Noted: {_VALID_AADHAAR}"
+    assert _first_message_content(result) == f"Noted: {_VALID_AADHAAR}"
 
 
 def test_a_known_surrogate_alongside_a_new_entity_only_substitutes_the_new_one(
@@ -298,7 +340,7 @@ def test_a_known_surrogate_alongside_a_new_entity_only_substitutes_the_new_one(
 ) -> None:
     session = _fresh_session(fake_clock)
     session.record_surrogate(_VALID_AADHAAR, "AADHAAR", fake_clock.now())
-    body = {
+    body: dict[str, JSONValue] = {
         "model": "gpt-4",
         "messages": [
             {"role": "user", "content": f"Known {_VALID_AADHAAR} and new PAN {_VALID_PAN}"}
@@ -307,7 +349,7 @@ def test_a_known_surrogate_alongside_a_new_entity_only_substitutes_the_new_one(
 
     result = _sanitize(body, session, fake_clock)
 
-    content = result["messages"][0]["content"]
+    content = _first_message_content(result)
     assert f"Known {_VALID_AADHAAR}" in content  # untouched — already known
     assert _VALID_PAN not in content  # substituted — genuinely new
 
@@ -320,7 +362,7 @@ def test_a_region_with_only_a_known_surrogate_produces_no_log_line(
     substituted — a pass-through span is not a "span_sanitized" event."""
     session = _fresh_session(fake_clock)
     session.record_surrogate(_VALID_AADHAAR, "AADHAAR", fake_clock.now())
-    body = {"model": "gpt-4", "messages": [{"role": "user", "content": _VALID_AADHAAR}]}
+    body: dict[str, JSONValue] = {"model": "gpt-4", "messages": [{"role": "user", "content": _VALID_AADHAAR}]}
 
     _sanitize(body, session, fake_clock)
 
@@ -344,11 +386,11 @@ def test_tier1_wins_over_an_overlapping_tier2_span_end_to_end(fake_clock: FakeCl
     content = f"Please invoice {_VALID_PAN} Textiles Pvt Ltd"
     org_start = content.index(_VALID_PAN)
     model = _FakeTier2Model([_match(org_start, len(content), "ORG")])
-    body = {"model": "gpt-4", "messages": [{"role": "user", "content": content}]}
+    body: dict[str, JSONValue] = {"model": "gpt-4", "messages": [{"role": "user", "content": content}]}
 
     result = _sanitize(body, _fresh_session(fake_clock), fake_clock, model)
 
-    sanitized_content = result["messages"][0]["content"]
+    sanitized_content = _first_message_content(result)
     assert _VALID_PAN not in sanitized_content
     assert sanitized_content.startswith("Please invoice ")
     assert sanitized_content.endswith(" Textiles Pvt Ltd")
@@ -366,11 +408,11 @@ def test_a_detected_person_span_is_substituted_with_a_name_map_surrogate(
     via the session name map, exactly like a Phase 3 name allocation."""
     content = "Ramesh Kumar called yesterday"
     model = _FakeTier2Model([_match(0, len("Ramesh Kumar"), "PERSON")])
-    body = {"model": "gpt-4", "messages": [{"role": "user", "content": content}]}
+    body: dict[str, JSONValue] = {"model": "gpt-4", "messages": [{"role": "user", "content": content}]}
 
     result = _sanitize(body, _fresh_session(fake_clock), fake_clock, model)
 
-    sanitized_content = result["messages"][0]["content"]
+    sanitized_content = _first_message_content(result)
     assert "Ramesh Kumar" not in sanitized_content
     assert sanitized_content.endswith(" called yesterday")
     surrogate = sanitized_content.removesuffix(" called yesterday")
@@ -390,11 +432,11 @@ def test_org_and_address_spans_are_also_substituted_via_the_name_map(
     model = _FakeTier2Model(
         [_match(org_start, org_end, "ORG"), _match(address_start, address_end, "ADDRESS")]
     )
-    body = {"model": "gpt-4", "messages": [{"role": "user", "content": content}]}
+    body: dict[str, JSONValue] = {"model": "gpt-4", "messages": [{"role": "user", "content": content}]}
 
     result = _sanitize(body, _fresh_session(fake_clock), fake_clock, model)
 
-    sanitized_content = result["messages"][0]["content"]
+    sanitized_content = _first_message_content(result)
     assert "Bharat Textiles" not in sanitized_content
     assert "12 MG Road, Bengaluru" not in sanitized_content
     assert sanitized_content.startswith("Contact ")
@@ -411,14 +453,14 @@ def test_the_same_real_name_gets_the_same_surrogate_within_one_session(
     `Session.allocate_or_lookup_name()`'s idempotent forward map."""
     session = _fresh_session(fake_clock)
     model = _FakeTier2Model([_match(0, len("Ramesh Kumar"), "PERSON")])
-    body_1 = {"model": "gpt-4", "messages": [{"role": "user", "content": "Ramesh Kumar called"}]}
-    body_2 = {"model": "gpt-4", "messages": [{"role": "user", "content": "Ramesh Kumar emailed"}]}
+    body_1: dict[str, JSONValue] = {"model": "gpt-4", "messages": [{"role": "user", "content": "Ramesh Kumar called"}]}
+    body_2: dict[str, JSONValue] = {"model": "gpt-4", "messages": [{"role": "user", "content": "Ramesh Kumar emailed"}]}
 
     result_1 = _sanitize(body_1, session, fake_clock, model)
     result_2 = _sanitize(body_2, session, fake_clock, model)
 
-    surrogate_1 = result_1["messages"][0]["content"].removesuffix(" called")
-    surrogate_2 = result_2["messages"][0]["content"].removesuffix(" emailed")
+    surrogate_1 = _first_message_content(result_1).removesuffix(" called")
+    surrogate_2 = _first_message_content(result_2).removesuffix(" emailed")
     assert surrogate_1 == surrogate_2
 
 
@@ -432,7 +474,7 @@ def test_tier2_failure_with_fail_mode_open_still_sanitizes_tier1_entities(
     """The model itself failing must not take down Tier-1 sanitization
     with it: under `open`, the Aadhaar is still substituted, and the
     Tier-2 failure is logged rather than silently swallowed."""
-    body = {
+    body: dict[str, JSONValue] = {
         "model": "gpt-4",
         "messages": [{"role": "user", "content": f"Aadhaar {_VALID_AADHAAR}"}],
     }
@@ -440,7 +482,7 @@ def test_tier2_failure_with_fail_mode_open_still_sanitizes_tier1_entities(
 
     result = _sanitize(body, _fresh_session(fake_clock), fake_clock, model, "open")
 
-    sanitized_content = result["messages"][0]["content"]
+    sanitized_content = _first_message_content(result)
     assert _VALID_AADHAAR not in sanitized_content
     formatter = PiiSafeFormatter()
     events = [json.loads(formatter.format(r))["event"] for r in captured_records]
@@ -450,7 +492,7 @@ def test_tier2_failure_with_fail_mode_open_still_sanitizes_tier1_entities(
 def test_tier2_failure_with_fail_mode_closed_raises_fail_closed_error_and_body_untouched(
     fake_clock: FakeClock,
 ) -> None:
-    body = {
+    body: dict[str, JSONValue] = {
         "model": "gpt-4",
         "messages": [{"role": "user", "content": f"Aadhaar {_VALID_AADHAAR}"}],
     }

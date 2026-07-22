@@ -12,13 +12,15 @@ import random
 
 import pytest
 
+from src.core.types import EntityType
+
 from benchmarks.arms.ours import OurCascadeArm
 from benchmarks.arms.presidio_custom.engine import PresidioCustomArm
 from benchmarks.generate.entity_values import generate_value
 
 pytestmark = pytest.mark.real_model
 
-_ALL_EIGHT_STRUCTURED_AND_PERSON_ORG_ADDRESS_FREE_TYPES = (
+_ALL_EIGHT_STRUCTURED_AND_PERSON_ORG_ADDRESS_FREE_TYPES: tuple[EntityType, ...] = (
     "AADHAAR",
     "PAN",
     "IFSC",

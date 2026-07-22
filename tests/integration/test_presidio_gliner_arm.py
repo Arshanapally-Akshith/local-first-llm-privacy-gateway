@@ -11,10 +11,14 @@ import random
 
 import pytest
 
+from src.core.types import EntityType
+
 from benchmarks.arms.presidio_gliner.engine import PresidioGlinerArm
 from benchmarks.generate.entity_values import generate_value
 
 pytestmark = pytest.mark.real_model
+
+_FIVE_CUSTOM_TYPES: tuple[EntityType, ...] = ("AADHAAR", "PAN", "IFSC", "UPI", "VEHICLE_REG")
 
 
 @pytest.fixture(scope="module")
@@ -25,7 +29,7 @@ def arm() -> PresidioGlinerArm:
 def test_gliner_arm_detects_each_of_the_five_tier1_custom_types(arm: PresidioGlinerArm) -> None:
     # Unchanged from arm 2 - the backend swap only affects PERSON/ORG/
     # ADDRESS, never the five Tier-1 custom recognizers.
-    for entity_type in ("AADHAAR", "PAN", "IFSC", "UPI", "VEHICLE_REG"):
+    for entity_type in _FIVE_CUSTOM_TYPES:
         value = generate_value(entity_type, random.Random(0))
         text = f"The value on file is {value}, please confirm."
         predictions = arm.predict(text)
@@ -87,5 +91,7 @@ def test_gliner_arm_never_predicts_person_via_the_removed_spacy_recognizer(
     # backend swap. Asserting on the underlying registry directly is
     # the precise way to prove removal, independent of any one
     # sentence's detectability.
-    recognizer_names = {r.name for r in arm._engine.registry.recognizers}
+    # getattr(), not `r.name` directly: Presidio's own type stubs leave
+    # EntityRecognizer.name's declared type unresolvable to mypy here.
+    recognizer_names = {getattr(r, "name") for r in arm._engine.registry.recognizers}  # noqa: B009
     assert "SpacyRecognizer" not in recognizer_names

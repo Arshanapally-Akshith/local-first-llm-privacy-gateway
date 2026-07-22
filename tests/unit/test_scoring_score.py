@@ -5,7 +5,7 @@ real-data, real-arm proof lives in
 `tests/integration/test_scoring_real_arm.py`.
 """
 
-from src.core.types import Offset
+from src.core.types import EntityType, Offset
 
 from benchmarks.arms.arm import Prediction
 from benchmarks.generate.dataset_types import BenchmarkExample, GoldEntity
@@ -95,7 +95,7 @@ def test_empty_gold_and_empty_predictions_returns_an_empty_dict() -> None:
 
 
 def test_aggregate_scores_sums_across_examples() -> None:
-    per_example = [
+    per_example: list[dict[EntityType, ConfusionCounts]] = [
         {"PAN": ConfusionCounts(true_positives=1, false_positives=0, false_negatives=0)},
         {"PAN": ConfusionCounts(true_positives=0, false_positives=1, false_negatives=1)},
         {"AADHAAR": ConfusionCounts(true_positives=1, false_positives=0, false_negatives=0)},

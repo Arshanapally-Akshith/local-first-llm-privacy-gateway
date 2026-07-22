@@ -10,6 +10,7 @@ import pytest
 from src.core.exceptions import RehydrationError
 from src.core.types import CorrelationId, EntityType, SessionId
 from src.detect.tier1.checksum import verhoeff_generate_check_digit
+from src.pipeline.field_walker import JSONValue
 from src.pipeline.rehydrate import REQUIRED_WINDOW_LOOKAHEAD, rehydrate, rehydrate_body
 from src.session.names import DEFAULT_NAME_CANDIDATES
 from src.session.session import Session
@@ -42,6 +43,25 @@ class _IdentityShuffleRandom(random.Random):
 _KEY_PROVIDER = _FakeKeyProvider()
 _AADHAAR_PAYLOAD = "23456789012"
 _VALID_AADHAAR = _AADHAAR_PAYLOAD + verhoeff_generate_check_digit(_AADHAAR_PAYLOAD)
+
+
+def _first_choice_message_content(body: dict[str, JSONValue]) -> str:
+    """Extract `body["choices"][0]["message"]["content"]` as a real
+    `str` — `rehydrate_body()`'s return type is `dict[str, JSONValue]`
+    (correctly; a rehydrated body can contain anything a response body
+    can), so the one test here asserting something string-specific about
+    it needs to narrow first. Mirrors
+    `test_sanitize.py::_first_message_content()`'s identical reasoning
+    for the request-path equivalent."""
+    choices = body["choices"]
+    assert isinstance(choices, list)
+    choice = choices[0]
+    assert isinstance(choice, dict)
+    message = choice["message"]
+    assert isinstance(message, dict)
+    content = message["content"]
+    assert isinstance(content, str)
+    return content
 
 
 def _session(clock: FakeClock) -> Session:
@@ -169,7 +189,7 @@ def test_rehydrate_body_walks_every_text_bearing_field(fake_clock: FakeClock) ->
     session = _session(fake_clock)
     surrogate = engine.encrypt("AADHAAR", _VALID_AADHAAR, _KEY_PROVIDER)
     session.record_surrogate(surrogate, "AADHAAR", fake_clock.now())
-    body = {
+    body: dict[str, JSONValue] = {
         "id": "chatcmpl-1",
         "choices": [
             {
@@ -182,7 +202,7 @@ def test_rehydrate_body_walks_every_text_bearing_field(fake_clock: FakeClock) ->
 
     result = rehydrate_body(body, session, _KEY_PROVIDER, correlation_id=_CORRELATION_ID)
 
-    assert result["choices"][0]["message"]["content"] == f"Aadhaar: {_VALID_AADHAAR}"  # type: ignore[index]
+    assert _first_choice_message_content(result) == f"Aadhaar: {_VALID_AADHAAR}"
     assert result["id"] == "chatcmpl-1"
 
 
@@ -190,7 +210,7 @@ def test_rehydrate_body_leaves_a_body_with_nothing_to_rehydrate_unchanged(
     fake_clock: FakeClock,
 ) -> None:
     session = _session(fake_clock)
-    body = {"choices": [{"message": {"content": "Hello world"}}]}
+    body: dict[str, JSONValue] = {"choices": [{"message": {"content": "Hello world"}}]}
 
     result = rehydrate_body(body, session, _KEY_PROVIDER, correlation_id=_CORRELATION_ID)
 

@@ -16,7 +16,12 @@ passes or fails.
 """
 
 import random
+from typing import cast
 
+from presidio_analyzer.nlp_engine import NlpArtifacts
+
+from src.core.types import EntityType
+from src.detect.detector import Detector
 from src.detect.tier1.aadhaar import AadhaarDetector
 from src.detect.tier1.ifsc import IfscDetector
 from src.detect.tier1.pan import PanDetector
@@ -29,13 +34,18 @@ from benchmarks.arms.presidio_custom.recognizers import (
 )
 from benchmarks.generate.entity_values import generate_value
 
-_DETECTORS_BY_TYPE = {
+_DETECTORS_BY_TYPE: dict[EntityType, type[Detector]] = {
     "AADHAAR": AadhaarDetector,
     "PAN": PanDetector,
     "IFSC": IfscDetector,
     "UPI": UpiDetector,
     "VEHICLE_REG": VehicleRegistrationDetector,
 }
+_NO_NLP_ARTIFACTS = cast(NlpArtifacts, None)
+"""`DetectorBackedRecognizer.analyze()` never touches `nlp_artifacts`
+(see its own docstring) - these tests pass a placeholder, typed via
+`cast` rather than loosened to `Optional` in production code for a
+parameter that is never actually optional there."""
 
 
 def test_build_custom_recognizers_returns_exactly_the_five_types_presidio_lacks() -> None:
@@ -48,7 +58,7 @@ def test_each_recognizer_detects_its_own_synthetic_value_with_score_1() -> None:
     for entity_type, detector_cls in _DETECTORS_BY_TYPE.items():
         value = generate_value(entity_type, random.Random(0))
         recognizer = DetectorBackedRecognizer(detector_cls())
-        results = recognizer.analyze(value, entities=[], nlp_artifacts=None)
+        results = recognizer.analyze(value, entities=[], nlp_artifacts=_NO_NLP_ARTIFACTS)
         assert len(results) == 1
         result = results[0]
         assert result.entity_type == entity_type
@@ -59,14 +69,14 @@ def test_each_recognizer_detects_its_own_synthetic_value_with_score_1() -> None:
 
 def test_recognizer_returns_empty_list_for_text_with_no_matching_entity() -> None:
     recognizer = DetectorBackedRecognizer(AadhaarDetector())
-    assert recognizer.analyze("no PII here at all", entities=[], nlp_artifacts=None) == []
+    assert recognizer.analyze("no PII here at all", entities=[], nlp_artifacts=_NO_NLP_ARTIFACTS) == []
 
 
 def test_recognizer_finds_its_entity_embedded_in_a_larger_sentence() -> None:
     value = generate_value("PAN", random.Random(1))
     text = f"Please update my PAN {value} in the records."
     recognizer = DetectorBackedRecognizer(PanDetector())
-    results = recognizer.analyze(text, entities=[], nlp_artifacts=None)
+    results = recognizer.analyze(text, entities=[], nlp_artifacts=_NO_NLP_ARTIFACTS)
     assert len(results) == 1
     assert text[results[0].start : results[0].end] == value
 

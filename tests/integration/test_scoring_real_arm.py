@@ -19,7 +19,7 @@ from datetime import datetime, timezone
 import pytest
 
 from src.core.fail_mode import FailMode
-from src.core.types import CorrelationId, SessionId
+from src.core.types import CorrelationId, EntityType, SessionId
 from src.detect.cascade import detect
 from src.detect.tier1.checksum import verhoeff_is_valid
 from src.detect.tier2.gliner_model import get_tier2_model
@@ -32,7 +32,16 @@ from benchmarks.scoring.score import score_arm
 
 pytestmark = pytest.mark.real_model
 
-_TIER1_TYPES = ("AADHAAR", "PAN", "IFSC", "UPI", "VEHICLE_REG", "CARD", "EMAIL", "PHONE")
+_TIER1_TYPES: tuple[EntityType, ...] = (
+    "AADHAAR",
+    "PAN",
+    "IFSC",
+    "UPI",
+    "VEHICLE_REG",
+    "CARD",
+    "EMAIL",
+    "PHONE",
+)
 
 
 def _one_example_per_template() -> tuple:

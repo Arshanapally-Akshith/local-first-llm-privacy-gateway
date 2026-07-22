@@ -11,11 +11,15 @@ import random
 
 import pytest
 
+from src.core.types import EntityType
+
 from benchmarks.arms.presidio_custom.engine import PresidioCustomArm
 from benchmarks.arms.presidio_stock import PresidioStockArm
 from benchmarks.generate.entity_values import generate_value
 
 pytestmark = pytest.mark.real_model
+
+_FIVE_CUSTOM_TYPES: tuple[EntityType, ...] = ("AADHAAR", "PAN", "IFSC", "UPI", "VEHICLE_REG")
 
 
 @pytest.fixture(scope="module")
@@ -24,7 +28,7 @@ def arm() -> PresidioCustomArm:
 
 
 def test_custom_arm_detects_each_of_the_five_added_entity_types(arm: PresidioCustomArm) -> None:
-    for entity_type in ("AADHAAR", "PAN", "IFSC", "UPI", "VEHICLE_REG"):
+    for entity_type in _FIVE_CUSTOM_TYPES:
         value = generate_value(entity_type, random.Random(0))
         text = f"The value on file is {value}, please confirm."
         predictions = arm.predict(text)

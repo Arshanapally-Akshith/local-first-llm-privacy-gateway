@@ -7,8 +7,9 @@ generator module itself deliberately contains no self-validation, see
 its own module docstring)."""
 
 import random
+from typing import cast
 
-from src.core.types import ENTITY_TYPES, Offset, Span
+from src.core.types import ENTITY_TYPES, EntityType, Offset, Span
 from src.detect import precedence
 from src.detect.registry import get_tier1_detectors
 from src.detect.tier1.checksum import luhn_is_valid, verhoeff_is_valid
@@ -19,7 +20,7 @@ from benchmarks.generate.entity_values import _phone_candidate_wins_precedence, 
 
 _TIER1_DETECTORS_BY_TYPE = {detector.entity_type: detector for detector in get_tier1_detectors()}
 _STRUCTURED_TYPES = tuple(_TIER1_DETECTORS_BY_TYPE)
-_NAME_MAP_TYPES = ("PERSON", "ORG", "ADDRESS")
+_NAME_MAP_TYPES: tuple[EntityType, ...] = ("PERSON", "ORG", "ADDRESS")
 _SEEDS = (0, 1, 2, 3, 42, 1000)
 
 
@@ -69,7 +70,8 @@ def test_name_map_values_are_drawn_from_the_real_candidate_pools() -> None:
 
 
 def test_generation_is_deterministic_given_the_same_rng_state() -> None:
-    for entity_type in ENTITY_TYPES:
+    for raw_entity_type in ENTITY_TYPES:
+        entity_type = cast(EntityType, raw_entity_type)
         first = generate_value(entity_type, random.Random(7))
         second = generate_value(entity_type, random.Random(7))
         assert first == second
@@ -81,7 +83,8 @@ def test_generation_varies_across_rng_states_for_types_with_more_than_one_possib
     # type here has a large enough value space that two different seeds
     # producing the same value by chance is not something 6 seeds should
     # trigger.
-    for entity_type in ENTITY_TYPES:
+    for raw_entity_type in ENTITY_TYPES:
+        entity_type = cast(EntityType, raw_entity_type)
         values = {generate_value(entity_type, random.Random(seed)) for seed in _SEEDS}
         assert len(values) > 1, f"{entity_type} produced the same value across all seeds"
 

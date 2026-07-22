@@ -21,15 +21,18 @@ jobs:
           cache: pip
 
       - name: Install dependencies
-        run: pip install -r requirements-dev.txt
+        run: |
+          pip install -r requirements-dev.txt
+          pip install -r requirements-benchmark.txt
 
       - name: Lint (ruff)
         run: ruff check --line-length 100 .
 
-      - name: Type-check (mypy --strict on src and app)
+      - name: Type-check (mypy --strict on src, app, and benchmarks)
         run: |
           mypy --strict src
           mypy --strict app
+          mypy --strict benchmarks
           mypy tests
 
       - name: Test (pytest)

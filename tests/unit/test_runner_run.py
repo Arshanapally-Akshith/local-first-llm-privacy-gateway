@@ -7,7 +7,12 @@ dataset, arm, or model involved. `build_report()`'s own orchestration
 
 import pytest
 
-from benchmarks.runner.run import BenchmarkReport, _entity_type_summary, render_markdown
+from benchmarks.runner.run import (
+    BenchmarkReport,
+    EntityTypeSummary,
+    _entity_type_summary,
+    render_markdown,
+)
 from benchmarks.scoring.types import ConfusionCounts, EntityTypeReport
 
 
@@ -29,7 +34,7 @@ def test_entity_type_summary_carries_every_field() -> None:
     assert summary["f1"] == pytest.approx(0.8)
 
 
-_ONE_TYPE_ARM = {
+_ONE_TYPE_ARM: dict[str, EntityTypeSummary] = {
     "AADHAAR": {
         "precision": 1.0,
         "recall": 1.0,
