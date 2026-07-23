@@ -8,10 +8,12 @@ misconfigured deployment fails at startup and never at first request
 (BUILD.md Phase 0 DoD).
 """
 
+from datetime import timedelta
 from functools import lru_cache
 from typing import Literal
+from urllib.parse import urlsplit
 
-from pydantic import Field, SecretStr
+from pydantic import Field, SecretStr, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -104,6 +106,58 @@ class Settings(BaseSettings):
     reasoning `src/session/store.py`'s `DEFAULT_MAX_SESSIONS` already
     documents) a defaulted, overridable flag is appropriate here, not a
     forced explicit choice."""
+
+    @field_validator("session_ttl")
+    @classmethod
+    def _session_ttl_must_fit_a_timedelta(cls, value: int) -> int:
+        """Reject a `SESSION_TTL` too large for `timedelta` to represent.
+
+        `get_session_store()` (`src/session/store.py`) unconditionally
+        builds `timedelta(seconds=settings.session_ttl)` — an int this
+        conversion can't hold isn't a valid TTL at all, regardless of
+        `gt=0`. Without this check, such a value passed `Settings()`
+        construction cleanly and only raised a bare, uncaught
+        `OverflowError` on the *first request* (Phase 7 hardening
+        finding — see `docs/DECISIONS.md`). The bound enforced here is
+        not a guessed constant: it is exactly what `timedelta` itself
+        can represent, so failure and reason are the same fact.
+        """
+        try:
+            timedelta(seconds=value)
+        except OverflowError as exc:
+            raise ValueError(
+                f"SESSION_TTL={value} does not fit in a timedelta — "
+                "get_session_store() builds timedelta(seconds=SESSION_TTL) "
+                "unconditionally, and this value overflows that "
+                "conversion. Choose a smaller value, in seconds."
+            ) from exc
+        return value
+
+    @field_validator("upstream_base_url")
+    @classmethod
+    def _upstream_base_url_must_be_an_absolute_http_url(cls, value: str) -> str:
+        """Reject a `UPSTREAM_BASE_URL` that isn't a syntactically valid
+        absolute `http(s)` URL.
+
+        `build_upstream_client()` (`src/proxy/upstream_client.py`) passes
+        this value straight to `httpx.AsyncClient(base_url=...)`, which
+        performs no shape validation of its own at construction — a
+        malformed value (no scheme, no host) previously passed both
+        `Settings()` and client construction silently, surfacing only as
+        a generic connection failure deep inside a real request (Phase 7
+        hardening finding — see `docs/DECISIONS.md`). This checks shape
+        only, never reachability: dialing the URL at startup would
+        require the upstream to already be running, which this project
+        does not assume.
+        """
+        parsed = urlsplit(value)
+        if parsed.scheme not in ("http", "https") or not parsed.netloc:
+            raise ValueError(
+                f"UPSTREAM_BASE_URL={value!r} is not an absolute http(s) URL "
+                "(expected e.g. http://127.0.0.1:8081) — this is the exact "
+                "value build_upstream_client() passes to httpx.AsyncClient."
+            )
+        return value
 
 
 @lru_cache

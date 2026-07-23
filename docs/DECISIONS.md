@@ -2990,3 +2990,101 @@ survives the misfire unchanged, and a non-conforming value at the role
 position is still fully detected and substituted. Full fast suite
 (`pytest`), `ruff`, and `mypy --strict src` all pass with no
 regressions.
+
+---
+
+## 2026-07-23 - Phase 7 Task 2: configuration hardening — two Settings-level validators close two "passes startup, crashes at first request" gaps; no cross-field invariants found to enforce
+
+**What this closes.** A full audit of every field on `Settings`
+(`src/core/config.py`) against how each is actually consumed, cross-
+checked against `ARCHITECTURE.md`'s own claim ("Every variable is
+validated before the server binds... a configuration error must never
+be discovered at first request") — which turned out to be false for
+two fields:
+
+1. **`SESSION_TTL` overflow.** `session_ttl: int = Field(gt=0)` accepted
+   any positive int, including one too large for `datetime.timedelta`
+   to represent. `get_session_store()` (`src/session/store.py`)
+   unconditionally builds `timedelta(seconds=settings.session_ttl)` —
+   an absurdly large value passed `Settings()` construction cleanly and
+   only raised a bare, uncaught `OverflowError` on the first request.
+2. **`UPSTREAM_BASE_URL` shape.** `Field(min_length=1)` only checked
+   non-emptiness. Neither `Settings()` nor `httpx.AsyncClient(base_url=...)`
+   (`build_upstream_client()`, `src/proxy/upstream_client.py`) validate
+   URL shape at construction — a malformed value passed both silently,
+   surfacing only as a generic connection failure deep inside a real
+   request.
+
+**Fix.** Two `@field_validator`s added directly to `Settings`:
+`_session_ttl_must_fit_a_timedelta` (attempts `timedelta(seconds=value)`,
+converts an `OverflowError` into a clean, actionable `ValueError`) and
+`_upstream_base_url_must_be_an_absolute_http_url` (`urllib.parse.urlsplit`,
+requires `scheme in {"http","https"}` and a non-empty host). Both live
+in the one file that already owns every other constraint on these nine
+fields — no new validation module, no change to `get_session_store()`,
+`build_upstream_client()`, or any route. The `upstream_base_url` check
+is shape-only, deliberately: validating reachability would mean dialing
+the URL at startup, which requires the upstream to already be running —
+an assumption this project doesn't make (the mock upstream is a
+separate process, started independently).
+
+**Cross-field invariants — explicitly evaluated, none found to enforce.**
+Before implementing, every pair of the nine `Settings` fields was
+checked against actual consumer code for a real "mutually exclusive,"
+"one requires another," or "mode implies required/forbidden config"
+relationship:
+
+- `upstream_mode` × `upstream_base_url` (and the documented-but-
+  nonexistent `UPSTREAM_API_KEY`) is the only pairing shaped like a
+  genuine cross-field invariant — `live` mode *should*, in principle,
+  require a credential `mock` mode forbids. But `UPSTREAM_API_KEY` does
+  not exist anywhere in code (only in `ARCHITECTURE.md`'s now-corrected
+  Configuration Architecture table), and `upstream_mode` itself is read
+  nowhere in application code — confirmed by grep, and stated directly
+  in `upstream_client.py`'s own docstring ("`base_url` is
+  `settings.upstream_base_url` regardless of whether `UPSTREAM_MODE` is
+  mock or live"). Explicitly decided (product owner, this task):
+  `upstream_mode` stays informational-only; fix the documentation to
+  stop overclaiming, do not add live-provider authentication as a
+  side effect of a hardening task. Adding a `model_validator` coupling
+  these two fields today would have nothing real behind it — both
+  modes already require exactly the same thing (a shape-valid URL).
+- `fail_mode` × anything: no coupling exists anywhere — scoped to
+  Tier-2 detector failures only (confirmed by grep; upstream errors and
+  stream drops use a separate, fixed code path per this file's own
+  2026-07-21 entries on FAIL_MODE's scope).
+- `ner_warmup` × `ner_model`: a real behavioral coupling (disabling
+  warmup defers `ner_model`'s validity check to first use), but not a
+  contradiction to reject — there is no cheaper way to validate a
+  HuggingFace model id is loadable than loading it, which is exactly
+  the cost `NER_WARMUP=false` exists to defer. Documented as an
+  accepted trade-off, not fixed.
+- Every remaining pairing (`session_ttl`×`upstream_timeout`,
+  `fpe_key`×`session_ttl`, `log_level`×anything, `upstream_base_url`×
+  `upstream_timeout`) governs an independent subsystem with no shared
+  code path — no plausible operator error looks like "these two
+  disagree."
+
+**Why no `@model_validator` was added.** CLAUDE.md: "Don't apply SOLID
+ceremonially" and "don't design for hypothetical future requirements"
+apply here in spirit — a cross-field validator with no real invariant
+behind it is validation theater, not hardening. All fixes in this task
+stay at the single-field level.
+
+**Verified.** New `tests/unit/test_config.py` (did not exist before this
+task) covers every required-field-missing case, every existing
+constraint (`gt=0`, `min_length`, `Literal` membership including case
+sensitivity, `extra="forbid"`), `get_settings()` singleton caching,
+`fpe_key`'s repr-safety, and both new validators (rejection cases, a
+just-under-the-boundary acceptance case, and valid-URL acceptance,
+parametrized). Two named regression tests
+(`tests/regression/test_session_ttl_overflow_fails_at_startup.py`,
+`tests/regression/test_upstream_base_url_shape_fails_at_startup.py`)
+reproduce each original symptom directly. All `Settings()` construction
+in the new test file passes pydantic-settings' own `_env_file=None`
+override, discovered to be necessary mid-task: this developer's local,
+untracked `.env` file (present, `.gitignore`d) would otherwise leak
+into test outcomes for any defaulted field the test doesn't explicitly
+override — a real test-isolation hazard, not hypothetical, fixed before
+it could cause a flaky suite. Full fast suite, `ruff`, and
+`mypy --strict src` all pass with no regressions.

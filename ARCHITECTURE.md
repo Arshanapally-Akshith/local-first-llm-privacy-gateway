@@ -719,18 +719,18 @@ All configuration is loaded from `.env` via `pydantic-settings` into a single va
 
 | Variable | Purpose | Notes |
 |---|---|---|
-| `UPSTREAM_MODE` | `mock` \| `live` | **Defaults to `mock`.** No key, no network, no cost. |
-| `UPSTREAM_BASE_URL` | Upstream endpoint | Required when `live`. Never hardcoded — this flag is why the mock exists at all. |
-| `UPSTREAM_API_KEY` | Provider credential | Only read when `live`. Never logged, never in an error message. |
+| `UPSTREAM_MODE` | `mock` \| `live` | **Defaults to `mock`.** Informational only — the gateway does not branch on this value anywhere; the mock/live distinction is entirely which URL is configured in `UPSTREAM_BASE_URL`. There is currently no support for an upstream provider credential (no `UPSTREAM_API_KEY` exists) — adding one is a real feature, not a configuration-hardening fix, and hasn't been scoped. |
+| `UPSTREAM_BASE_URL` | Upstream endpoint | Required in both modes. Never hardcoded — this flag is why the mock exists at all. Must be a syntactically valid absolute `http(s)` URL (checked for shape, not reachability, at startup — Phase 7). |
 | `FPE_KEY` | FF1 key | Required. Absent → startup failure. Determines surrogate stability; rotating it invalidates in-flight sessions by design. |
-| `SESSION_TTL` | Session lifetime | Security control. |
+| `SESSION_TTL` | Session lifetime | Security control. Must fit inside a Python `timedelta` (Phase 7) — rejects an absurdly large value at startup rather than an `OverflowError` on first request. |
 | `FAIL_MODE` | `open` \| `closed` | **No safe default exists** — see below. Must be set explicitly. |
-| `WINDOW_LOOKAHEAD` | Sliding-window size | Derived from max surrogate length; a correctness parameter, not a tuning knob. |
-| `NER_MODEL` | Tier-2 model identifier | CPU-sized. |
-| `NER_WARMUP` | Warm at startup | Prevents cold start from polluting p50. |
+| `NER_MODEL` | Tier-2 model identifier | CPU-sized. Validity is only exercised at startup when `NER_WARMUP` is enabled (see below) — there is no cheaper way to check a model id is loadable than loading it. |
+| `NER_WARMUP` | Warm at startup | Prevents cold start from polluting p50. Disabling it also defers `NER_MODEL`'s own validity check to first use — an accepted coupling, not a bug (`docs/DECISIONS.md`, 2026-07-23). |
 | `LOG_LEVEL` | Verbosity | **No level, including DEBUG, ever enables plaintext PII.** |
 
-**Startup validation.** Every variable is validated **before the server binds**. Missing `FPE_KEY`, unset `FAIL_MODE`, `live` mode without a base URL, an unloadable model — all are startup failures with actionable messages. The rule: a configuration error must never be discovered at first request, because at first request there is real data in flight.
+(`WINDOW_LOOKAHEAD`, previously listed here, is not an environment variable — it's `REQUIRED_WINDOW_LOOKAHEAD`, a hardcoded, compile-time-derived constant in `src/pipeline/rehydrate.py`. Removed from this table as a documentation error.)
+
+**Startup validation.** Every field-level constraint (`gt=0`, `min_length`, `Literal` membership, and — as of Phase 7 — `SESSION_TTL` fitting a `timedelta` and `UPSTREAM_BASE_URL` being a shape-valid URL) is checked at `Settings()` construction, which happens at module import time in `app/main.py`, before the server binds. An unloadable Tier-2 model is also a startup failure, but only when `NER_WARMUP` is enabled (see the table above). The rule: a configuration error must never be discovered at first request, because at first request there is real data in flight. `docs/DECISIONS.md` (2026-07-23) records a full audit against this claim, including two gaps it found and closed, and an explicit check for cross-field invariants (mutually-exclusive settings, one field requiring another) — none were found to exist beyond what's already noted above.
 
 **No silent security defaults.** `FAIL_MODE` has no default. A default of `open` would silently leak; a default of `closed` would silently cause outages. Both are decisions the operator must make consciously, so the process refuses to start until one is made.
 
