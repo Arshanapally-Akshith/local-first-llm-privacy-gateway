@@ -272,6 +272,8 @@ The hard phase. Do not rush it.
 
 ---
 
+> **2026-07-23 annotation.** An unplanned hardening pass (protocol-aware field walking, configuration validation, exception-handling centralization, session-lifecycle verification) was inserted here and released as `v0.7.1`, a maintenance release on top of Phase 6 — not a renumbering of this roadmap. Phase 7 below is unchanged and still pending. See `docs/DECISIONS.md`, 2026-07-23, "Phase 7 Task 5," for the full reasoning.
+
 ## PHASE 7 — Latency Harness
 
 Three specific traps; instrument against all of them.

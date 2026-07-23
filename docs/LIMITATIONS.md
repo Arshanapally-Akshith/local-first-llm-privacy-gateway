@@ -44,10 +44,12 @@ of leaking the original value.
 
 ## UPI IDs and email addresses cannot be sanitized yet — they hard-fail instead
 
-**Phase 2. Still open as of Phase 4.** (An earlier version of this
-entry said "Resolved in Phase 3" — that was wrong. The session-scoped
-map Phase 3 built, and Phase 4 Task 5 wired PERSON/ORG/ADDRESS into, was
-never extended to UPI or email. Corrected here, not silently.)
+**Phase 2. Still open — independently reconfirmed unresolved at every
+phase closeout since, most recently the Phase 7 hardening pass
+(2026-07-23).** (An earlier version of this entry said "Resolved in
+Phase 3" — that was wrong. The session-scoped map Phase 3 built, and
+Phase 4 Task 5 wired PERSON/ORG/ADDRESS into, was never extended to UPI
+or email. Corrected here, not silently.)
 
 `UpiDetector` and `EmailDetector` are registered and active — a UPI ID
 or email address in a request **is detected**. No surrogate domain is
@@ -67,8 +69,8 @@ turns into a `500` **before any upstream call is made**
 calls `field_walker.rebuild()` until every region has succeeded). This
 is a hard-fail, not a silent leak — the request is refused rather than
 partially sanitized — but it does mean **a request containing a UPI ID
-or email address cannot be sanitized and forwarded at all, in any phase
-through Phase 4.**
+or email address cannot be sanitized and forwarded at all**, still true
+as of this hardening pass.
 
 ---
 

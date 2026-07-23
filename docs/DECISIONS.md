@@ -3350,3 +3350,138 @@ to change nothing beyond what's demonstrated):**
 **Verified.** `tests/unit/test_session_store.py` grew from 13 to 15
 tests (2 new); full fast suite, `ruff`, and `mypy --strict src` all
 pass with no regressions.
+
+---
+
+## 2026-07-23 - Phase 7 Task 5: final consistency audit — this hardening work is a maintenance release (v0.7.1), not BUILD.md's Phase 7; adversarial results restored to version control; PROJECT_STATE.md's omission consolidated into this log
+
+**What prompted this.** A full repository-wide consistency audit before
+tagging a release: `ARCHITECTURE.md`, `BUILD.md`, `CLAUDE.md`, `docs/`,
+`.github/`, `src/`, `tests/`, `.env.example`, and every phase summary,
+checked for documentation-vs-implementation drift, stale references,
+version/phase coherence, and release blockers. Full findings in the
+design-review turn preceding this entry.
+
+**Finding — the work done under the label "Phase 7" in this session
+does not match `BUILD.md`'s own Phase 7.** `BUILD.md` (line 275) and
+`docs/PHASE_6_SUMMARY.md`'s own "What Phase 7 will do" section (written
+and committed at the `v0.7.0` tag) both define Phase 7 as the Latency
+Harness — concurrency-level percentiles, cold-start reporting, TTFT.
+What was actually built and committed under that label (`32df9db`,
+`50d0b2d`, `fd57133`, `d3a8a0a`, plus this task's own commit) is a
+hardening audit: protocol-aware field walking, configuration
+validation, exception-handling centralization, and session-lifecycle
+verification. Three of those four commits are already pushed to
+`origin/main` with "Phase 7" in their messages and cannot be rewritten
+(`CLAUDE.md`: "never rewrite shared history").
+
+**Decision.** This work is released as **`v0.7.1`**, a maintenance
+release on top of `v0.7.0` (Phase 6) — not `v0.8.0`. `BUILD.md`'s own
+Phase 7 (Latency Harness) and Phase 8 (Demo, README, Release) remain
+entirely unstarted, under their original numbering and definitions.
+The "Phase 7" label already baked into the four pushed/local commit
+messages and this file's own preceding four headings is accepted as
+historical fact — it happened, and describes accurately what those
+commits did — but is not read as satisfying, replacing, or renumbering
+`BUILD.md`'s actual Phase 7.
+
+**Alternatives considered.**
+- Formally renumber: amend `BUILD.md` to make this hardening pass the
+  official Phase 7, pushing Latency Harness and Demo/README/Release to
+  Phase 8 and Phase 9: rejected — the product owner's explicit choice,
+  made when presented with both options. `BUILD.md` is the frozen
+  plan-of-record; renumbering it after the fact to match whatever
+  happened would make the phase numbering describe history rather than
+  drive it, which defeats its own stated purpose ("You do not skip
+  ahead").
+- Tag it `v0.8.0` anyway, treating "Phase 7" as informally redefined by
+  usage: rejected — `v0.8.0` would then mean two different things in
+  two different documents (`BUILD.md` vs. this session's commit
+  history), which is exactly the kind of version-reference incoherence
+  this same audit was checking for elsewhere.
+
+**Also fixed, same task: `adversarial/results/` restored to version
+control.** `.gitignore` previously excluded `adversarial/results/`
+(added in `717cec8`, the commit `v0.7.0` itself points to) — and the
+directory was never tracked at any point before that either. This
+directly contradicted `docs/PHASE_6_SUMMARY.md`'s own claim that
+`latest.json`/`latest.md` are "the committed, commit-stamped
+artifact," `CLAUDE.md`'s Forbidden Actions clause (which carves out
+"except committed results, which are stamped" as the one exception to
+never committing generated artifacts), and `BUILD.md`'s own
+description of this file as "the single strongest artifact in the
+repo" — and was inconsistent with `benchmarks/results/` and
+`rehydration_fidelity/results/`, both of which are genuinely tracked.
+Fixed: the `.gitignore` line removed, and `latest.json`, `latest.md`,
+and `redteam.md` (the blind-red-team template, committed exactly as
+found — still correctly marked "NOT YET RUN," no data fabricated)
+added to version control.
+
+**Also fixed, same task: `docs/PHASE_1_SUMMARY.md` did not exist.**
+Unlike `PROJECT_STATE.md`'s omission (below), no decision trail
+explained this — Phase 1 was fully built and tagged (`v0.2.0`) but its
+`BUILD.md`-mandated summary was apparently never written, and nothing
+in `docs/DECISIONS.md` or any later phase summary says why. Fixed by
+reconstructing `docs/PHASE_1_SUMMARY.md` from commit history, current
+tests, and `BUILD.md`'s own Phase 1 specification — explicitly marked
+as reconstructed, not contemporaneous, in its own opening notice. Per
+explicit instruction: no invented conversations, motivations, or design
+discussions; every technical claim in it traces to a commit diff/message,
+a currently-passing test, or a `docs/DECISIONS.md` entry dated within
+Phase 1's own timeframe (2026-07-18). Where nothing in the repository
+records what a human did manually at the time, that section says so
+rather than guessing.
+
+**Also consolidated, same task: `PROJECT_STATE.md`'s omission, into
+this log.** The decision to never create `PROJECT_STATE.md` was made
+once, reasoned fully, in `docs/PHASE_0_SUMMARY.md` ("Git history,
+BUILD.md's phase structure, and each phase's own
+`docs/PHASE_N_SUMMARY.md` together already give a returning reader the
+project's current state ... without a fourth, separately-maintained
+document that can drift out of sync with the other three"), and has
+been reaffirmed, consistently and without contradiction, in every
+single phase summary since (`PHASE_2` through `PHASE_6`). It was never
+recorded here, despite `CLAUDE.md`'s own rule that a decision this
+load-bearing — re-litigated at every phase closeout — belongs in this
+append-only log as "interview ammunition," not only in a phase
+summary. This entry is that missing record, pointing back to
+`docs/PHASE_0_SUMMARY.md` as the original source rather than
+restating invented reasoning. Separately: `BUILD.md` line 104 ("Also
+maintain a running `PROJECT_STATE.md` at repo root... Update it every
+phase") and its Phase 8 DoD item ("`PROJECT_STATE.md` final and
+accurate") are both still-live text, never amended to match seven
+phases' worth of consistent practice to the contrary — `BUILD.md` now
+carries a short dated annotation at that line noting the decision and
+pointing here, rather than being rewritten.
+
+**Also fixed, same task: `CLAUDE.md`'s Repository Conventions
+directory tree**, stale since project inception — corrected to match
+the actual repository (added `rehydration_fidelity/`, `ARCHITECTURE.md`,
+`.github/`, `mypy.ini`/`pytest.ini`, the three `requirements*.txt`
+files; corrected `docs/THREAT_MODEL.md` to point at `ARCHITECTURE.md`'s
+Security Architecture section, `benchmarks/configs/` to point at
+`benchmarks/arms/presidio_custom/`; removed `scripts/`, which was never
+built; annotated `README.md`/`PROJECT_STATE.md` as not-yet-due under
+`BUILD.md`'s own Phase 8, not missing).
+
+**Also fixed, same task: `tasks.ps1 check` widened to match CI.**
+Previously `mypy --strict src` only; CI (`.github/workflows/ci.yml`)
+also strict-checks `app`, `benchmarks`, `adversarial`, plus non-strict
+`mypy tests`, and runs `pytest tests` rather than bare `pytest`. A
+developer trusting the local convenience target as "the gate" wasn't
+running what CI actually enforces. `tasks.ps1 check` now runs the
+identical command sequence CI does.
+
+**Also fixed, same task: `docs/LIMITATIONS.md`'s UPI/email entry.**
+Its status line still read "Still open as of Phase 4," even though
+Phase 5, Phase 6, and this hardening pass have each independently
+re-confirmed the gap is still real without the entry ever being
+touched to say so. The underlying claim was never wrong — only the
+"last checked" framing was stale. Updated to reflect the current,
+repeatedly-reconfirmed state.
+
+**Verified.** `ruff`, `mypy --strict src`, and the CI-equivalent
+commands (`mypy --strict` on `app`/`benchmarks`/`adversarial`, `mypy
+tests`, `pytest tests`) all pass with no regressions. No production
+code, architecture, or behavior changed anywhere in this task —
+documentation, tracked artifacts, and developer tooling only.

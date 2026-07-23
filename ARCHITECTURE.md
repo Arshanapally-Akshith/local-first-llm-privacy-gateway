@@ -954,7 +954,7 @@ The honest limit, stated in the dataset card and the README: carrier phrasings a
 
 Presidio ships **no** Aadhaar/PAN/IFSC/UPI recognizers by default. Benchmarking against stock Presidio means beating a tool at a task it does not attempt. One question — *"did you configure Presidio with custom recognizers?"* — collapses the claim and the credibility of everything else alongside it.
 
-So: **custom recognizers are written for Presidio, committed to `benchmarks/configs/`, and included in the comparison.** The config file is the fairness proof, and it is meant to be pointed at.
+So: **custom recognizers are written for Presidio, committed to `benchmarks/arms/presidio_custom/`, and included in the comparison.** The config file is the fairness proof, and it is meant to be pointed at.
 
 ### Ablation arms: attributing the delta
 

@@ -1,0 +1,780 @@
+{
+  "cases": [
+    {
+      "bypass_class": "base64_encoding",
+      "case_id": "base64_encoding-AADHAAR-adversarial",
+      "caught": false,
+      "detail": "prefix/suffix invariant held; sent value unchanged",
+      "entity_type": "AADHAAR",
+      "expected_outcome": "leaked",
+      "label": "adversarial",
+      "original_absent": true,
+      "prediction_matched": true,
+      "replacement_present": false,
+      "structurally_valid_json": true
+    },
+    {
+      "bypass_class": "base64_encoding",
+      "case_id": "base64_encoding-AADHAAR-clean",
+      "caught": true,
+      "detail": "prefix/suffix invariant held; sent value replaced",
+      "entity_type": "AADHAAR",
+      "expected_outcome": "caught",
+      "label": "clean",
+      "original_absent": true,
+      "prediction_matched": true,
+      "replacement_present": true,
+      "structurally_valid_json": true
+    },
+    {
+      "bypass_class": "base64_encoding",
+      "case_id": "base64_encoding-CARD-adversarial",
+      "caught": false,
+      "detail": "prefix/suffix invariant held; sent value unchanged",
+      "entity_type": "CARD",
+      "expected_outcome": "leaked",
+      "label": "adversarial",
+      "original_absent": true,
+      "prediction_matched": true,
+      "replacement_present": false,
+      "structurally_valid_json": true
+    },
+    {
+      "bypass_class": "base64_encoding",
+      "case_id": "base64_encoding-CARD-clean",
+      "caught": true,
+      "detail": "prefix/suffix invariant held; sent value replaced",
+      "entity_type": "CARD",
+      "expected_outcome": "caught",
+      "label": "clean",
+      "original_absent": true,
+      "prediction_matched": true,
+      "replacement_present": true,
+      "structurally_valid_json": true
+    },
+    {
+      "bypass_class": "homoglyphs",
+      "case_id": "homoglyphs-IFSC-adversarial",
+      "caught": false,
+      "detail": "prefix/suffix invariant held; sent value unchanged",
+      "entity_type": "IFSC",
+      "expected_outcome": "leaked",
+      "label": "adversarial",
+      "original_absent": true,
+      "prediction_matched": true,
+      "replacement_present": false,
+      "structurally_valid_json": true
+    },
+    {
+      "bypass_class": "homoglyphs",
+      "case_id": "homoglyphs-IFSC-clean",
+      "caught": true,
+      "detail": "prefix/suffix invariant held; sent value replaced",
+      "entity_type": "IFSC",
+      "expected_outcome": "caught",
+      "label": "clean",
+      "original_absent": true,
+      "prediction_matched": true,
+      "replacement_present": true,
+      "structurally_valid_json": true
+    },
+    {
+      "bypass_class": "homoglyphs",
+      "case_id": "homoglyphs-PAN-adversarial",
+      "caught": false,
+      "detail": "prefix/suffix invariant held; sent value unchanged",
+      "entity_type": "PAN",
+      "expected_outcome": "leaked",
+      "label": "adversarial",
+      "original_absent": true,
+      "prediction_matched": true,
+      "replacement_present": false,
+      "structurally_valid_json": true
+    },
+    {
+      "bypass_class": "homoglyphs",
+      "case_id": "homoglyphs-PAN-clean",
+      "caught": true,
+      "detail": "prefix/suffix invariant held; sent value replaced",
+      "entity_type": "PAN",
+      "expected_outcome": "caught",
+      "label": "clean",
+      "original_absent": true,
+      "prediction_matched": true,
+      "replacement_present": true,
+      "structurally_valid_json": true
+    },
+    {
+      "bypass_class": "number_words",
+      "case_id": "number_words-AADHAAR-adversarial",
+      "caught": false,
+      "detail": "prefix/suffix invariant held; sent value unchanged",
+      "entity_type": "AADHAAR",
+      "expected_outcome": "leaked",
+      "label": "adversarial",
+      "original_absent": true,
+      "prediction_matched": true,
+      "replacement_present": false,
+      "structurally_valid_json": true
+    },
+    {
+      "bypass_class": "number_words",
+      "case_id": "number_words-AADHAAR-clean",
+      "caught": true,
+      "detail": "prefix/suffix invariant held; sent value replaced",
+      "entity_type": "AADHAAR",
+      "expected_outcome": "caught",
+      "label": "clean",
+      "original_absent": true,
+      "prediction_matched": true,
+      "replacement_present": true,
+      "structurally_valid_json": true
+    },
+    {
+      "bypass_class": "number_words",
+      "case_id": "number_words-CARD-adversarial",
+      "caught": false,
+      "detail": "prefix/suffix invariant held; sent value unchanged",
+      "entity_type": "CARD",
+      "expected_outcome": "leaked",
+      "label": "adversarial",
+      "original_absent": true,
+      "prediction_matched": true,
+      "replacement_present": false,
+      "structurally_valid_json": true
+    },
+    {
+      "bypass_class": "number_words",
+      "case_id": "number_words-CARD-clean",
+      "caught": true,
+      "detail": "prefix/suffix invariant held; sent value replaced",
+      "entity_type": "CARD",
+      "expected_outcome": "caught",
+      "label": "clean",
+      "original_absent": true,
+      "prediction_matched": true,
+      "replacement_present": true,
+      "structurally_valid_json": true
+    },
+    {
+      "bypass_class": "number_words",
+      "case_id": "number_words-PHONE-adversarial",
+      "caught": false,
+      "detail": "prefix/suffix invariant held; sent value unchanged",
+      "entity_type": "PHONE",
+      "expected_outcome": "leaked",
+      "label": "adversarial",
+      "original_absent": true,
+      "prediction_matched": true,
+      "replacement_present": false,
+      "structurally_valid_json": true
+    },
+    {
+      "bypass_class": "number_words",
+      "case_id": "number_words-PHONE-clean",
+      "caught": true,
+      "detail": "prefix/suffix invariant held; sent value replaced",
+      "entity_type": "PHONE",
+      "expected_outcome": "caught",
+      "label": "clean",
+      "original_absent": true,
+      "prediction_matched": true,
+      "replacement_present": true,
+      "structurally_valid_json": true
+    },
+    {
+      "bypass_class": "pii_in_code",
+      "case_id": "pii_in_code-AADHAAR-adversarial",
+      "caught": false,
+      "detail": "prefix/suffix invariant held; sent value unchanged",
+      "entity_type": "AADHAAR",
+      "expected_outcome": "leaked",
+      "label": "adversarial",
+      "original_absent": false,
+      "prediction_matched": true,
+      "replacement_present": false,
+      "structurally_valid_json": true
+    },
+    {
+      "bypass_class": "pii_in_code",
+      "case_id": "pii_in_code-AADHAAR-clean",
+      "caught": true,
+      "detail": "prefix/suffix invariant held; sent value replaced",
+      "entity_type": "AADHAAR",
+      "expected_outcome": "caught",
+      "label": "clean",
+      "original_absent": true,
+      "prediction_matched": true,
+      "replacement_present": true,
+      "structurally_valid_json": true
+    },
+    {
+      "bypass_class": "pii_in_code",
+      "case_id": "pii_in_code-PAN-adversarial",
+      "caught": false,
+      "detail": "prefix/suffix invariant held; sent value unchanged",
+      "entity_type": "PAN",
+      "expected_outcome": "leaked",
+      "label": "adversarial",
+      "original_absent": false,
+      "prediction_matched": true,
+      "replacement_present": false,
+      "structurally_valid_json": true
+    },
+    {
+      "bypass_class": "pii_in_code",
+      "case_id": "pii_in_code-PAN-clean",
+      "caught": true,
+      "detail": "prefix/suffix invariant held; sent value replaced",
+      "entity_type": "PAN",
+      "expected_outcome": "caught",
+      "label": "clean",
+      "original_absent": true,
+      "prediction_matched": true,
+      "replacement_present": true,
+      "structurally_valid_json": true
+    },
+    {
+      "bypass_class": "pii_in_json_key",
+      "case_id": "pii_in_json_key-AADHAAR-adversarial",
+      "caught": false,
+      "detail": "key_present=True (True means the JSON key crossed unmodified)",
+      "entity_type": "AADHAAR",
+      "expected_outcome": "leaked",
+      "label": "adversarial",
+      "original_absent": false,
+      "prediction_matched": true,
+      "replacement_present": false,
+      "structurally_valid_json": true
+    },
+    {
+      "bypass_class": "pii_in_json_key",
+      "case_id": "pii_in_json_key-AADHAAR-clean",
+      "caught": true,
+      "detail": "prefix/suffix invariant held; sent value replaced",
+      "entity_type": "AADHAAR",
+      "expected_outcome": "caught",
+      "label": "clean",
+      "original_absent": true,
+      "prediction_matched": true,
+      "replacement_present": true,
+      "structurally_valid_json": true
+    },
+    {
+      "bypass_class": "pii_in_json_key",
+      "case_id": "pii_in_json_key-PHONE-adversarial",
+      "caught": false,
+      "detail": "key_present=True (True means the JSON key crossed unmodified)",
+      "entity_type": "PHONE",
+      "expected_outcome": "leaked",
+      "label": "adversarial",
+      "original_absent": false,
+      "prediction_matched": true,
+      "replacement_present": false,
+      "structurally_valid_json": true
+    },
+    {
+      "bypass_class": "pii_in_json_key",
+      "case_id": "pii_in_json_key-PHONE-clean",
+      "caught": true,
+      "detail": "prefix/suffix invariant held; sent value replaced",
+      "entity_type": "PHONE",
+      "expected_outcome": "caught",
+      "label": "clean",
+      "original_absent": true,
+      "prediction_matched": true,
+      "replacement_present": true,
+      "structurally_valid_json": true
+    },
+    {
+      "bypass_class": "spaced_digits",
+      "case_id": "spaced_digits-AADHAAR-adversarial",
+      "caught": false,
+      "detail": "prefix/suffix invariant held; sent value unchanged",
+      "entity_type": "AADHAAR",
+      "expected_outcome": "leaked",
+      "label": "adversarial",
+      "original_absent": true,
+      "prediction_matched": true,
+      "replacement_present": false,
+      "structurally_valid_json": true
+    },
+    {
+      "bypass_class": "spaced_digits",
+      "case_id": "spaced_digits-AADHAAR-clean",
+      "caught": true,
+      "detail": "prefix/suffix invariant held; sent value replaced",
+      "entity_type": "AADHAAR",
+      "expected_outcome": "caught",
+      "label": "clean",
+      "original_absent": true,
+      "prediction_matched": true,
+      "replacement_present": true,
+      "structurally_valid_json": true
+    },
+    {
+      "bypass_class": "spaced_digits",
+      "case_id": "spaced_digits-CARD-adversarial",
+      "caught": false,
+      "detail": "prefix/suffix invariant held; sent value unchanged",
+      "entity_type": "CARD",
+      "expected_outcome": "leaked",
+      "label": "adversarial",
+      "original_absent": true,
+      "prediction_matched": true,
+      "replacement_present": false,
+      "structurally_valid_json": true
+    },
+    {
+      "bypass_class": "spaced_digits",
+      "case_id": "spaced_digits-CARD-clean",
+      "caught": true,
+      "detail": "prefix/suffix invariant held; sent value replaced",
+      "entity_type": "CARD",
+      "expected_outcome": "caught",
+      "label": "clean",
+      "original_absent": true,
+      "prediction_matched": true,
+      "replacement_present": true,
+      "structurally_valid_json": true
+    },
+    {
+      "bypass_class": "spaced_digits",
+      "case_id": "spaced_digits-PHONE-adversarial",
+      "caught": false,
+      "detail": "prefix/suffix invariant held; sent value unchanged",
+      "entity_type": "PHONE",
+      "expected_outcome": "leaked",
+      "label": "adversarial",
+      "original_absent": true,
+      "prediction_matched": true,
+      "replacement_present": false,
+      "structurally_valid_json": true
+    },
+    {
+      "bypass_class": "spaced_digits",
+      "case_id": "spaced_digits-PHONE-clean",
+      "caught": true,
+      "detail": "prefix/suffix invariant held; sent value replaced",
+      "entity_type": "PHONE",
+      "expected_outcome": "caught",
+      "label": "clean",
+      "original_absent": true,
+      "prediction_matched": true,
+      "replacement_present": true,
+      "structurally_valid_json": true
+    },
+    {
+      "bypass_class": "split_across_turns",
+      "case_id": "split_across_turns-AADHAAR-adversarial",
+      "caught": false,
+      "detail": "fragments_intact=True (True means both halves crossed unchanged, making the full value trivially reconstructable from the transcript)",
+      "entity_type": "AADHAAR",
+      "expected_outcome": "leaked",
+      "label": "adversarial",
+      "original_absent": false,
+      "prediction_matched": true,
+      "replacement_present": false,
+      "structurally_valid_json": true
+    },
+    {
+      "bypass_class": "split_across_turns",
+      "case_id": "split_across_turns-AADHAAR-clean",
+      "caught": true,
+      "detail": "prefix/suffix invariant held; sent value replaced",
+      "entity_type": "AADHAAR",
+      "expected_outcome": "caught",
+      "label": "clean",
+      "original_absent": true,
+      "prediction_matched": true,
+      "replacement_present": true,
+      "structurally_valid_json": true
+    },
+    {
+      "bypass_class": "split_across_turns",
+      "case_id": "split_across_turns-PHONE-adversarial",
+      "caught": false,
+      "detail": "fragments_intact=True (True means both halves crossed unchanged, making the full value trivially reconstructable from the transcript)",
+      "entity_type": "PHONE",
+      "expected_outcome": "leaked",
+      "label": "adversarial",
+      "original_absent": false,
+      "prediction_matched": true,
+      "replacement_present": false,
+      "structurally_valid_json": true
+    },
+    {
+      "bypass_class": "split_across_turns",
+      "case_id": "split_across_turns-PHONE-clean",
+      "caught": true,
+      "detail": "prefix/suffix invariant held; sent value replaced",
+      "entity_type": "PHONE",
+      "expected_outcome": "caught",
+      "label": "clean",
+      "original_absent": true,
+      "prediction_matched": true,
+      "replacement_present": true,
+      "structurally_valid_json": true
+    },
+    {
+      "bypass_class": "transliterated_names",
+      "case_id": "transliterated_names-0-adversarial",
+      "caught": true,
+      "detail": "prefix/suffix invariant held; sent value replaced",
+      "entity_type": "PERSON",
+      "expected_outcome": "leaked",
+      "label": "adversarial",
+      "original_absent": true,
+      "prediction_matched": false,
+      "replacement_present": true,
+      "structurally_valid_json": true
+    },
+    {
+      "bypass_class": "transliterated_names",
+      "case_id": "transliterated_names-0-clean",
+      "caught": true,
+      "detail": "prefix/suffix invariant held; sent value replaced",
+      "entity_type": "PERSON",
+      "expected_outcome": "caught",
+      "label": "clean",
+      "original_absent": true,
+      "prediction_matched": true,
+      "replacement_present": true,
+      "structurally_valid_json": true
+    },
+    {
+      "bypass_class": "transliterated_names",
+      "case_id": "transliterated_names-1-adversarial",
+      "caught": true,
+      "detail": "prefix/suffix invariant held; sent value replaced",
+      "entity_type": "PERSON",
+      "expected_outcome": "leaked",
+      "label": "adversarial",
+      "original_absent": true,
+      "prediction_matched": false,
+      "replacement_present": true,
+      "structurally_valid_json": true
+    },
+    {
+      "bypass_class": "transliterated_names",
+      "case_id": "transliterated_names-1-clean",
+      "caught": true,
+      "detail": "prefix/suffix invariant held; sent value replaced",
+      "entity_type": "PERSON",
+      "expected_outcome": "caught",
+      "label": "clean",
+      "original_absent": true,
+      "prediction_matched": true,
+      "replacement_present": true,
+      "structurally_valid_json": true
+    },
+    {
+      "bypass_class": "zero_width",
+      "case_id": "zero_width-AADHAAR-adversarial",
+      "caught": false,
+      "detail": "prefix/suffix invariant held; sent value unchanged",
+      "entity_type": "AADHAAR",
+      "expected_outcome": "leaked",
+      "label": "adversarial",
+      "original_absent": true,
+      "prediction_matched": true,
+      "replacement_present": false,
+      "structurally_valid_json": true
+    },
+    {
+      "bypass_class": "zero_width",
+      "case_id": "zero_width-AADHAAR-clean",
+      "caught": true,
+      "detail": "prefix/suffix invariant held; sent value replaced",
+      "entity_type": "AADHAAR",
+      "expected_outcome": "caught",
+      "label": "clean",
+      "original_absent": true,
+      "prediction_matched": true,
+      "replacement_present": true,
+      "structurally_valid_json": true
+    },
+    {
+      "bypass_class": "zero_width",
+      "case_id": "zero_width-CARD-adversarial",
+      "caught": false,
+      "detail": "prefix/suffix invariant held; sent value unchanged",
+      "entity_type": "CARD",
+      "expected_outcome": "leaked",
+      "label": "adversarial",
+      "original_absent": true,
+      "prediction_matched": true,
+      "replacement_present": false,
+      "structurally_valid_json": true
+    },
+    {
+      "bypass_class": "zero_width",
+      "case_id": "zero_width-CARD-clean",
+      "caught": true,
+      "detail": "prefix/suffix invariant held; sent value replaced",
+      "entity_type": "CARD",
+      "expected_outcome": "caught",
+      "label": "clean",
+      "original_absent": true,
+      "prediction_matched": true,
+      "replacement_present": true,
+      "structurally_valid_json": true
+    },
+    {
+      "bypass_class": "zero_width",
+      "case_id": "zero_width-PAN-adversarial",
+      "caught": false,
+      "detail": "prefix/suffix invariant held; sent value unchanged",
+      "entity_type": "PAN",
+      "expected_outcome": "leaked",
+      "label": "adversarial",
+      "original_absent": true,
+      "prediction_matched": true,
+      "replacement_present": false,
+      "structurally_valid_json": true
+    },
+    {
+      "bypass_class": "zero_width",
+      "case_id": "zero_width-PAN-clean",
+      "caught": true,
+      "detail": "prefix/suffix invariant held; sent value replaced",
+      "entity_type": "PAN",
+      "expected_outcome": "caught",
+      "label": "clean",
+      "original_absent": true,
+      "prediction_matched": true,
+      "replacement_present": true,
+      "structurally_valid_json": true
+    }
+  ],
+  "classes": {
+    "base64_encoding": {
+      "adversarial_caught": 0,
+      "adversarial_recall": 0.0,
+      "adversarial_total": 2,
+      "clean_caught": 2,
+      "clean_recall": 1.0,
+      "clean_total": 2,
+      "coverage": {
+        "covered_entity_types": [
+          "AADHAAR",
+          "CARD"
+        ],
+        "omitted_entity_types": [
+          "ADDRESS",
+          "EMAIL",
+          "IFSC",
+          "ORG",
+          "PAN",
+          "PERSON",
+          "PHONE",
+          "UPI",
+          "VEHICLE_REG"
+        ]
+      }
+    },
+    "homoglyphs": {
+      "adversarial_caught": 0,
+      "adversarial_recall": 0.0,
+      "adversarial_total": 2,
+      "clean_caught": 2,
+      "clean_recall": 1.0,
+      "clean_total": 2,
+      "coverage": {
+        "covered_entity_types": [
+          "IFSC",
+          "PAN"
+        ],
+        "omitted_entity_types": [
+          "AADHAAR",
+          "ADDRESS",
+          "CARD",
+          "EMAIL",
+          "ORG",
+          "PERSON",
+          "PHONE",
+          "UPI",
+          "VEHICLE_REG"
+        ]
+      }
+    },
+    "number_words": {
+      "adversarial_caught": 0,
+      "adversarial_recall": 0.0,
+      "adversarial_total": 3,
+      "clean_caught": 3,
+      "clean_recall": 1.0,
+      "clean_total": 3,
+      "coverage": {
+        "covered_entity_types": [
+          "AADHAAR",
+          "CARD",
+          "PHONE"
+        ],
+        "omitted_entity_types": [
+          "ADDRESS",
+          "EMAIL",
+          "IFSC",
+          "ORG",
+          "PAN",
+          "PERSON",
+          "UPI",
+          "VEHICLE_REG"
+        ]
+      }
+    },
+    "pii_in_code": {
+      "adversarial_caught": 0,
+      "adversarial_recall": 0.0,
+      "adversarial_total": 2,
+      "clean_caught": 2,
+      "clean_recall": 1.0,
+      "clean_total": 2,
+      "coverage": {
+        "covered_entity_types": [
+          "AADHAAR",
+          "PAN"
+        ],
+        "omitted_entity_types": [
+          "ADDRESS",
+          "CARD",
+          "EMAIL",
+          "IFSC",
+          "ORG",
+          "PERSON",
+          "PHONE",
+          "UPI",
+          "VEHICLE_REG"
+        ]
+      }
+    },
+    "pii_in_json_key": {
+      "adversarial_caught": 0,
+      "adversarial_recall": 0.0,
+      "adversarial_total": 2,
+      "clean_caught": 2,
+      "clean_recall": 1.0,
+      "clean_total": 2,
+      "coverage": {
+        "covered_entity_types": [
+          "AADHAAR",
+          "PHONE"
+        ],
+        "omitted_entity_types": [
+          "ADDRESS",
+          "CARD",
+          "EMAIL",
+          "IFSC",
+          "ORG",
+          "PAN",
+          "PERSON",
+          "UPI",
+          "VEHICLE_REG"
+        ]
+      }
+    },
+    "spaced_digits": {
+      "adversarial_caught": 0,
+      "adversarial_recall": 0.0,
+      "adversarial_total": 3,
+      "clean_caught": 3,
+      "clean_recall": 1.0,
+      "clean_total": 3,
+      "coverage": {
+        "covered_entity_types": [
+          "AADHAAR",
+          "CARD",
+          "PHONE"
+        ],
+        "omitted_entity_types": [
+          "ADDRESS",
+          "EMAIL",
+          "IFSC",
+          "ORG",
+          "PAN",
+          "PERSON",
+          "UPI",
+          "VEHICLE_REG"
+        ]
+      }
+    },
+    "split_across_turns": {
+      "adversarial_caught": 0,
+      "adversarial_recall": 0.0,
+      "adversarial_total": 2,
+      "clean_caught": 2,
+      "clean_recall": 1.0,
+      "clean_total": 2,
+      "coverage": {
+        "covered_entity_types": [
+          "AADHAAR",
+          "PHONE"
+        ],
+        "omitted_entity_types": [
+          "ADDRESS",
+          "CARD",
+          "EMAIL",
+          "IFSC",
+          "ORG",
+          "PAN",
+          "PERSON",
+          "UPI",
+          "VEHICLE_REG"
+        ]
+      }
+    },
+    "transliterated_names": {
+      "adversarial_caught": 2,
+      "adversarial_recall": 1.0,
+      "adversarial_total": 2,
+      "clean_caught": 2,
+      "clean_recall": 1.0,
+      "clean_total": 2,
+      "coverage": {
+        "covered_entity_types": [
+          "PERSON"
+        ],
+        "omitted_entity_types": [
+          "AADHAAR",
+          "ADDRESS",
+          "CARD",
+          "EMAIL",
+          "IFSC",
+          "ORG",
+          "PAN",
+          "PHONE",
+          "UPI",
+          "VEHICLE_REG"
+        ]
+      }
+    },
+    "zero_width": {
+      "adversarial_caught": 0,
+      "adversarial_recall": 0.0,
+      "adversarial_total": 3,
+      "clean_caught": 3,
+      "clean_recall": 1.0,
+      "clean_total": 3,
+      "coverage": {
+        "covered_entity_types": [
+          "AADHAAR",
+          "CARD",
+          "PAN"
+        ],
+        "omitted_entity_types": [
+          "ADDRESS",
+          "EMAIL",
+          "IFSC",
+          "ORG",
+          "PERSON",
+          "PHONE",
+          "UPI",
+          "VEHICLE_REG"
+        ]
+      }
+    }
+  },
+  "commit": "e47a030a4cf7f4f048db1af7d51f63ee30809c3f",
+  "scope_note": "Scope: single-bypass attacks only. Every case below applies exactly one obfuscation technique. Combinations (e.g. base64 + zero-width, split-across-turns + homoglyph, or any other pairing of two classes in this suite) have not been measured and are out of scope for this phase — do not read a class's recall number as bounding performance against a combined attack.",
+  "total_cases": 42
+}

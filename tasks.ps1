@@ -40,18 +40,33 @@ switch ($Task) {
         uvicorn src.mock_upstream.main:app --reload --port 8081
     }
     "test" {
-        pytest
+        pytest tests
     }
     "lint" {
         ruff check --line-length 100 .
     }
     "typecheck" {
+        # Matches .github/workflows/ci.yml exactly: strict on every
+        # first-party package, non-strict on tests/ (tests/ has never
+        # been held to --strict — see docs/DECISIONS.md, 2026-07-23,
+        # "Phase 7 Task 5").
         mypy --strict src
+        mypy --strict app
+        mypy --strict benchmarks
+        mypy --strict adversarial
+        mypy tests
     }
     "check" {
+        # Runs the identical command sequence CI does (.github/workflows/ci.yml),
+        # so this local target and CI can never silently diverge on what
+        # counts as "passing" (docs/DECISIONS.md, 2026-07-23, "Phase 7 Task 5").
         ruff check --line-length 100 .
         mypy --strict src
-        pytest
+        mypy --strict app
+        mypy --strict benchmarks
+        mypy --strict adversarial
+        mypy tests
+        pytest tests
     }
     "rehydration-fidelity" {
         # Regenerates rehydration_fidelity/results/latest.json — BUILD.md,

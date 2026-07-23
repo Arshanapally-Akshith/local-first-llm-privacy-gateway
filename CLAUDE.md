@@ -136,14 +136,21 @@ Modules and functions: `snake_case`. Classes: `PascalCase`. Constants: `UPPER_SN
 
 ## Repository Conventions
 
+> Corrected 2026-07-23 (Phase 7 Task 5 consistency audit) to match the actual repository — this tree had drifted since project inception. `PROJECT_STATE.md`, `README.md`, and `scripts/` were sketched here ahead of the phase that builds them (or, for `PROJECT_STATE.md`, a phase that deliberately no longer will — see `docs/DECISIONS.md`, 2026-07-23, "Phase 7 Task 5"); `docs/THREAT_MODEL.md` and `benchmarks/configs/` describe content that exists, just not in that exact shape. Annotated below rather than silently deleted, so the gap between the original sketch and reality stays visible.
+
 ```
 .
 ├── CLAUDE.md                  # this file — permanent rules
 ├── BUILD.md                   # phase workflow — the plan
-├── PROJECT_STATE.md           # current reality — updated every phase
-├── README.md                  # the 90-second artifact; all numbers generated
-├── Makefile / tasks.ps1       # bench, adversarial, test, lint — PowerShell-friendly
+├── ARCHITECTURE.md            # what the system is and why — read alongside BUILD.md/CLAUDE.md
+├── README.md                  # NOT YET BUILT — BUILD.md Phase 8 ("Demo, README, Release"), still pending
+├── tasks.ps1                  # bench, adversarial, test, lint — PowerShell-only, see BUILD.md "MY ENVIRONMENT"
+├── mypy.ini, pytest.ini       # mypy --strict (pydantic plugin) / pytest config
+├── requirements.txt           # runtime deps
+├── requirements-dev.txt       # + test/lint/typecheck deps
+├── requirements-benchmark.txt # + benchmark-arm-only deps (Presidio, spaCy)
 ├── .env.example
+├── .github/workflows/ci.yml   # lint + typecheck + test on push/PR, zero secrets required
 ├── src/
 │   ├── core/                  # types, config, logging, exceptions. Imports nothing internal.
 │   ├── detect/
@@ -160,25 +167,32 @@ Modules and functions: `snake_case`. Classes: `PascalCase`. Constants: `UPPER_SN
 │   ├── generate/              # slot carriers + programmatic injection
 │   ├── data/                  # generated dataset + dataset card
 │   ├── arms/                  # presidio_stock, presidio_custom, presidio_gliner, ours
-│   ├── configs/               # committed Presidio recognizer configs — the fairness proof
+│   │   └── presidio_custom/   # the committed custom-recognizer config — the fairness proof
+│   │                          # (sketched above as benchmarks/configs/; built here instead)
 │   ├── runner/                # make bench entrypoint; emits artifacts
 │   └── results/               # committed artifacts, each stamped with producing commit
 ├── adversarial/
 │   ├── cases/                 # one module per bypass class
+│   ├── redteam/                # blind red-team session instructions
 │   ├── runner/
-│   └── results/               # includes the bypasses that still work
+│   └── results/               # includes the bypasses that still work — committed, not gitignored
+├── rehydration_fidelity/
+│   ├── runner/                # rehydration-fidelity harness entrypoint
+│   └── results/               # committed per-category fidelity artifact
 ├── tests/
 │   ├── unit/
 │   ├── integration/
 │   ├── property/              # FF1 round-trip, span arithmetic
 │   └── regression/            # one file per fixed bug, named for it
-├── docs/
-│   ├── DECISIONS.md           # append-only
-│   ├── LIMITATIONS.md
-│   ├── THREAT_MODEL.md
-│   └── PHASE_N_SUMMARY.md
-└── scripts/                   # dev-only. Never imported by src/.
+└── docs/
+    ├── DECISIONS.md           # append-only
+    ├── LIMITATIONS.md
+    ├── PHASE_N_SUMMARY.md
+    └── (threat model content lives in ARCHITECTURE.md's "Security Architecture"
+         section, not a standalone file — sketched above as docs/THREAT_MODEL.md)
 ```
+
+`PROJECT_STATE.md` (sketched above at inception, "current reality — updated every phase") does not exist and, per `docs/DECISIONS.md` (2026-07-23, "Phase 7 Task 5"), will not — `docs/PHASE_0_SUMMARY.md` records the original decision, reaffirmed at every phase closeout since, to answer that need with git history plus `BUILD.md`'s phase structure plus each phase's own summary instead. `scripts/` (sketched above, "dev-only") was never built — nothing in this project has needed a dev-only script outside `tasks.ps1`.
 
 **Module organization.** One concept per module. A module over ~300 lines is a smell; over ~500 it is a defect. `src/core/` imports nothing internal — if it needs to, the dependency is inverted.
 
