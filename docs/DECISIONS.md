@@ -3743,3 +3743,74 @@ Forbidden Actions ("no architecture change without approval"). The
 event-loop-serialization behaviour itself remains exactly as it was;
 only how the harness measures and reports it changed. Whether to
 address the serialization itself is a separate, future decision.
+
+## 2026-07-23 — Phase 7 Task 2 second follow-up: a gateway-generated HTTP 504 on `multiturn_5`/concurrency=16 — a narrow, content-verified timeout outcome, not a generalized non-200 exemption
+
+**What happened.** With the previous follow-up's fix in place (timeout
+is a recorded outcome, not fatal), a second pilot run got past the
+earlier failure point and reached `multiturn_5` at concurrency=16,
+where the gateway itself returned a real, well-formed HTTP 504:
+`{"error": "upstream request timed out"}`. Because any non-200 was
+still unconditionally fatal in `_send_one()`, this aborted the run —
+correctly, per the existing design, since a status-code check alone
+cannot distinguish this from a genuine defect.
+
+**Root cause, investigated before any fix.** This is not the same
+timeout as the previous follow-up. Two distinct timeouts exist on two
+distinct hops:
+
+- `latency/runner/measure.py`'s own client-to-*gateway* timeout
+  (`DEFAULT_REQUEST_TIMEOUT_S`, raised to 120s by the previous fix).
+- The *gateway's own* upstream-client timeout, gateway-to-*mock*
+  (`Settings.upstream_timeout`, `src/core/config.py` — confirmed via
+  this repo's actual `.env`: `UPSTREAM_TIMEOUT=30`), consumed in
+  `src/proxy/upstream_client.py`'s `httpx.AsyncClient(..., timeout=settings.upstream_timeout)`.
+
+Raising the outer (120s) timeout didn't make anything faster — it
+simply gave the inner (30s) timeout room to be the one that fires
+first. The mechanism is the same event-loop serialization already
+identified (`chat_completions()` calls `sanitize()` synchronously,
+inline, with no thread/executor offload, on a single-process,
+single-event-loop `uvicorn` gateway): once a request's own `sanitize()`
+completes and it awaits the mock's response, that await *does* yield
+the event loop, but if the loop stays saturated servicing *other*
+requests' blocking `sanitize()` calls, this request's already-arrived
+response can sit unread long enough for its own 30s deadline to elapse
+— even though the mock (a lightweight echo server with no detection
+cost) almost certainly answered promptly. The gateway's own error
+handling (`_translate_upstream_connection_failure`,
+`src/proxy/routes.py`) then correctly reports "upstream request timed
+out" and a 504, exactly as designed — this is the gateway functioning
+correctly under a real, disclosed scalability limit, not a bug in
+either the harness or the gateway's error handling.
+
+**Fix implemented — deliberately narrow, per explicit instruction not
+to generalize past this one case.** `_send_one()`
+(`latency/runner/measure.py`) now checks, only for a 504 response,
+whether the body matches exactly `{"error": "upstream request timed
+out"}` (`_is_gateway_upstream_timeout()`) — matched by *content*, not
+status code alone, so an unrecognized 504 (different body, non-JSON
+body) still raises. Only that exact, verified shape becomes a
+`_RawFailure(kind="timeout", ...)`, folded into the same `timeout_count`
+bucket the previous follow-up already added — not a new, third
+category, since a gateway-side upstream timeout and a client-side
+connection timeout are the same *kind* of finding ("this request could
+not complete within a configured tolerance"), just observed at
+different hops. Every other non-200 status — 400, 422, 500, 502, 503,
+or any other unexpected code, including a differently-shaped 504 —
+still raises `RuntimeError` unchanged, per explicit instruction: those
+represent a defect or an infrastructure problem, not the expected
+scalability behaviour this phase measures, and generalizing the
+exemption to cover them would have quietly hidden a real class of bug
+behind the same "this is just load" excuse.
+
+**Test coverage added**, `tests/unit/test_latency_measure.py`: the
+exact 504 shape is classified as a timeout outcome; 400/422/500/502/503
+each still raise; a 504 with an unrecognized JSON body still raises; a
+504 with a non-JSON body still raises. The last two exist specifically
+to prove the content check is load-bearing, not merely a status-code
+shortcut.
+
+**What this fix deliberately does not do.** Touch `UPSTREAM_TIMEOUT`,
+`sanitize()`'s call site, or anything about the gateway's concurrency
+model — unchanged from the previous follow-up's own scope boundary.

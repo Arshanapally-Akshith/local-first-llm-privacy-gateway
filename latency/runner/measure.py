@@ -21,8 +21,24 @@ see `RequestOutcome` and `CellRawResults` below. A pilot run against
 took the entire run down with it; `docs/DECISIONS.md` (2026-07-23,
 "Phase 7 Task 2 follow-up") records the investigation and the fix
 implemented here.
+
+A *second* pilot run, after that fix, reached `multiturn_5` at
+concurrency=16 and got a gateway-generated HTTP 504
+(`{"error": "upstream request timed out"}` —
+`src/proxy/routes.py::_translate_upstream_connection_failure`) rather
+than a client-side `httpx` exception: the gateway's own upstream-client
+timeout (`UPSTREAM_TIMEOUT`, default 30s — a *different, inner* timeout
+than this module's own client-to-gateway one) tripped first once the
+outer timeout was widened. `docs/DECISIONS.md` (2026-07-23, "Phase 7
+Task 2 second follow-up") records that investigation and the narrow fix
+below: only this exact, structured 504 becomes a recorded timeout
+outcome. Every other non-200 status — 400, 422, 500, 502, 503, or
+anything else unexpected — stays a fatal `RuntimeError`, deliberately
+not generalized, because those represent a defect or an infrastructure
+problem, not the expected scalability behaviour this phase measures.
 """
 
+import json
 import time
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
@@ -47,6 +63,30 @@ _CORRELATION_ID_HEADER: str = "x-correlation-id"
 spelling it lowercase here documents that this is reading the response
 header `src/proxy/routes.py::_CORRELATION_ID_HEADER` sets (`X-Correlation-Id`),
 not asserting anything about wire casing."""
+
+_GATEWAY_UPSTREAM_TIMEOUT_STATUS: Final[int] = 504
+_GATEWAY_UPSTREAM_TIMEOUT_BODY: Final[dict[str, str]] = {"error": "upstream request timed out"}
+"""The exact status and body `_translate_upstream_connection_failure()`
+(`src/proxy/routes.py`) produces for a gateway-side upstream-client
+timeout (`Settings.upstream_timeout`, a different, *inner* timeout from
+this module's own client-to-gateway `DEFAULT_REQUEST_TIMEOUT_S`) —
+observed for real on `multiturn_5` at concurrency=16 (`docs/DECISIONS.md`,
+2026-07-23, "Phase 7 Task 2 second follow-up"). Matched by *content*,
+not status code alone: a 504 that doesn't carry this exact body is
+still an unexpected, fatal condition, not silently reclassified as
+this specific, already-understood outcome. Deliberately narrow, per
+explicit instruction: every other non-200 status — 400, 422, 500, 502,
+503, or anything else unexpected — stays fatal."""
+
+
+def _is_gateway_upstream_timeout(response: httpx.Response, body: bytes) -> bool:
+    if response.status_code != _GATEWAY_UPSTREAM_TIMEOUT_STATUS:
+        return False
+    try:
+        parsed: object = json.loads(body)
+    except json.JSONDecodeError:
+        return False
+    return bool(parsed == _GATEWAY_UPSTREAM_TIMEOUT_BODY)
 
 DEFAULT_REQUEST_TIMEOUT_S: Final[float] = 120.0
 """Per-request `httpx` timeout — connect, read, write, and pool all set
@@ -164,20 +204,31 @@ def _send_one(client: httpx.Client, workload: LatencyWorkload, session_id: str) 
     """Send one streaming request over a real socket and time it from
     the client's own perspective.
 
-    Returns a `_RawFailure` (never raises) for a timeout
-    (`httpx.TimeoutException` — connect, read, write, or pool) or any
-    other transport-level failure (`httpx.TransportError` — e.g. a
-    connection reset under heavy concurrent load): both are legitimate,
-    reportable outcomes of a (workload, concurrency) cell on this
-    machine, not harness defects (Phase 7 design follow-up; see this
-    module's own docstring).
+    Returns a `_RawFailure` (never raises) for:
+      - a timeout (`httpx.TimeoutException` — connect, read, write, or
+        pool) or any other transport-level failure (`httpx.TransportError`
+        — e.g. a connection reset under heavy concurrent load) on this
+        module's own client-to-gateway connection;
+      - a gateway-generated HTTP 504 carrying exactly
+        `_GATEWAY_UPSTREAM_TIMEOUT_BODY` — the gateway's *own*
+        upstream-client timeout (`Settings.upstream_timeout`) tripping
+        under the same concurrent load, translated into a real HTTP
+        response by `src/proxy/routes.py`'s existing error handling
+        rather than a raw client-side exception.
+    All three are legitimate, reportable outcomes of a (workload,
+    concurrency) cell on this machine, not harness defects (Phase 7
+    design follow-up; see this module's own docstring).
 
     Raises:
-        RuntimeError: a non-200 response, or a response missing the
-            `X-Correlation-Id` header — both are harness/gateway
-            defects for these fixed, known-good workloads, never a
-            latency sample worth silently recording as zero, and never
-            confusable with "the gateway is just slow right now."
+        RuntimeError: any other non-200 response (400, 422, 500, 502,
+            503, an unrecognized 504, or anything else unexpected), or
+            a 200 response missing the `X-Correlation-Id` header.
+            Deliberately not generalized past the one specific,
+            content-verified 504 shape above: these represent a defect
+            or an infrastructure problem for a fixed, known-good
+            workload, not the expected scalability behaviour this phase
+            measures, and must never be confused with "the gateway is
+            just slow right now."
     """
     request_sent_at_ms = time.time() * 1000
     start = time.perf_counter()
@@ -191,6 +242,14 @@ def _send_one(client: httpx.Client, workload: LatencyWorkload, session_id: str) 
         ) as response:
             if response.status_code != 200:
                 body = response.read()
+                if _is_gateway_upstream_timeout(response, body):
+                    return _RawFailure(
+                        kind="timeout",
+                        detail=(
+                            f"workload {workload.name!r}: gateway returned HTTP 504 "
+                            "upstream request timed out"
+                        ),
+                    )
                 raise RuntimeError(
                     f"workload {workload.name!r} got HTTP {response.status_code}: "
                     f"{body[:500]!r}"

@@ -1,8 +1,10 @@
-"""Unit tests for the Phase 7 timeout/error-handling fix in
-`latency/runner/measure.py` — a per-request timeout or transport
-failure must become a recorded outcome (`_RawFailure`), never a raised
-exception that would abort the whole benchmark run (see
-`docs/DECISIONS.md`, 2026-07-23, "Phase 7 Task 2 follow-up").
+"""Unit tests for the Phase 7 timeout/error-handling fixes in
+`latency/runner/measure.py` — a per-request timeout, transport
+failure, or gateway-generated HTTP 504 upstream-timeout must become a
+recorded outcome (`_RawFailure`), never a raised exception that would
+abort the whole benchmark run (see `docs/DECISIONS.md`, 2026-07-23,
+"Phase 7 Task 2 follow-up" and "Phase 7 Task 2 second follow-up").
+Every other non-200 status must still raise, unchanged.
 """
 
 import httpx
@@ -101,6 +103,66 @@ def test_send_one_returns_success_on_normal_response() -> None:
 
     assert isinstance(outcome, _RawSuccess)
     assert outcome.correlation_id == "corr-1"
+
+
+def test_send_one_classifies_gateway_504_upstream_timeout_as_a_timeout_outcome() -> None:
+    """The exact, structured 504
+    `src/proxy/routes.py::_translate_upstream_connection_failure` emits
+    for the gateway's own upstream-client timeout -- observed for real
+    on `multiturn_5` at concurrency=16 (`docs/DECISIONS.md`, 2026-07-23,
+    "Phase 7 Task 2 second follow-up") -- must become a recorded
+    timeout outcome, not a fatal RuntimeError."""
+
+    def _return_gateway_upstream_timeout(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(504, json={"error": "upstream request timed out"})
+
+    client = _mock_client(httpx.MockTransport(_return_gateway_upstream_timeout))
+
+    outcome = _send_one(client, BASELINE_CLEAN, "session-1")
+
+    assert isinstance(outcome, _RawFailure)
+    assert outcome.kind == "timeout"
+
+
+@pytest.mark.parametrize("status_code", [400, 422, 500, 502, 503])
+def test_send_one_still_raises_on_every_other_non_200_status(status_code: int) -> None:
+    """Deliberately not generalized past the one specific, content-
+    verified 504 shape: 400/422/500/502/503 (and, by the next test, an
+    unrecognized 504) all represent a defect or infrastructure problem
+    for a fixed, known-good workload, not the expected scalability
+    behaviour this phase measures, and must stay fatal."""
+
+    def _return_status(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(status_code, json={"error": "something else entirely"})
+
+    client = _mock_client(httpx.MockTransport(_return_status))
+
+    with pytest.raises(RuntimeError, match=f"got HTTP {status_code}"):
+        _send_one(client, BASELINE_CLEAN, "session-1")
+
+
+def test_send_one_raises_on_a_504_with_an_unrecognized_body() -> None:
+    """A 504 that isn't *exactly* the known upstream-timeout shape must
+    not be silently reclassified as that specific, already-understood
+    outcome -- matched by content, not status code alone."""
+
+    def _return_different_504(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(504, json={"error": "some other gateway timeout condition"})
+
+    client = _mock_client(httpx.MockTransport(_return_different_504))
+
+    with pytest.raises(RuntimeError, match="got HTTP 504"):
+        _send_one(client, BASELINE_CLEAN, "session-1")
+
+
+def test_send_one_raises_on_a_504_with_a_non_json_body() -> None:
+    def _return_504_plain_text(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(504, content=b"Gateway Timeout")
+
+    client = _mock_client(httpx.MockTransport(_return_504_plain_text))
+
+    with pytest.raises(RuntimeError, match="got HTTP 504"):
+        _send_one(client, BASELINE_CLEAN, "session-1")
 
 
 def test_run_cell_excludes_failures_from_measurements_and_counts_them(
