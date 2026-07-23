@@ -3814,3 +3814,69 @@ shortcut.
 **What this fix deliberately does not do.** Touch `UPSTREAM_TIMEOUT`,
 `sanitize()`'s call site, or anything about the gateway's concurrency
 model — unchanged from the previous follow-up's own scope boundary.
+
+## 2026-07-23 — Phase 7 Task 3: per-tier TTFT breakdown, closing a literal DoD gap
+
+**What was missing.** BUILD.md's Phase 7 DoD reads "Per-tier p50/p95/p99
++ tier-hit distribution" — two distinct things joined by "+". The
+harness already reported the second half (`CellReport.tier_hit`, a
+categorical fraction breakdown by `tier_hit_class`) but nothing computed
+latency percentiles *broken down by tier* — every `p50`/`p95`/`p99` in
+the report was an aggregate over all requests in a cell, undifferentiated
+by which tier resolved them. Verified against BUILD.md's exact text
+before implementing (quoted verbatim, both the Phase 7 narrative bullet
+and the DoD checklist line, plus Phase 4's "Tier-hit instrumentation
+emits which tier resolved each span" as the antecedent establishing what
+"tier" means throughout this project's vocabulary) — there is no
+precedent anywhere in BUILD.md for "tier" meaning two side-by-side
+benchmark result sets (that pattern exists only for Phase 5's four
+named accuracy arms, and is never called "tier" there).
+
+**Fix implemented — TTFT only, additive, report-layer only.**
+`_build_cell_report()` (`latency/runner/run.py`) gained
+`_per_tier_ttft_with_window()`: groups a cell's already-completed
+`RequestMeasurement`s by `tier_hit_class` (the same per-request
+attribute `_tier_hit_distribution()` already aggregates into fractions)
+and calls the one existing `summarize()` implementation independently
+per non-empty group. `CellReport` gained `per_tier_ttft_with_window_ms:
+dict[str, StatsSummary]`, keyed identically to `tier_hit` — a class
+with zero completed samples in a cell is simply absent from the dict,
+never a `None`/zero placeholder, mirroring `tier_hit`'s own "finding
+nothing is normal" contract. `render_markdown` renders a per-tier
+sub-table under each workload's existing table, listing only populated
+classes.
+
+Deliberately scoped to TTFT with the window only, per explicit
+instruction — not extended to `total_latency_ms`, `ttft_without_window_ms`,
+or `window_tax_ms`. BUILD.md's own text singles out TTFT specifically
+("TTFT is the only latency a human perceives") in the same paragraph as
+the per-tier requirement; extending to every other metric would have
+been reading more into one DoD line than its own justification supports.
+
+**Zero touch to measurement.** No change to `measure.py`,
+`process_harness.py`, `log_capture.py`, timeout/error classification,
+concurrency levels, `--repetitions`, or any gateway code — this is a
+pure re-aggregation of data (`RequestMeasurement.tier_hit_class`) that
+already existed on every successful measurement before this task. Every
+existing aggregate statistic (`ttft_with_window_ms`, `total_latency_ms`,
+etc.) is unchanged; this is additive only.
+
+**Expected shape of the result.** Most of the 8 fixed workloads were
+deliberately designed to isolate one tier's cost (`tier1_only` →
+almost always 100% `tier1_only`; `baseline_clean` → almost always 100%
+`neither`; `mixed_dense`/`multiturn_5`/`field_walker_heavy`/
+`pathological_chunking` → mostly `both`). So for most workloads the
+per-tier table will show exactly one populated class, closely mirroring
+the aggregate stats already shown above it — expected, not a defect;
+satisfying the DoD's literal text is the point, not manufacturing new
+signal where the workload matrix doesn't produce any.
+
+**Verified**: 4 new unit tests (multi-class grouping, single-class
+omission of the other three, aggregate stat unaffected by the new
+grouping, markdown rendering only shows populated classes — the last
+guards against a false-positive substring match, since
+`BASELINE_CLEAN`'s own description contains the plain English word
+"both"). Full suite: 809 passed, `mypy --strict` and `ruff` clean. A
+manual JSON-serialization check confirms the new field round-trips
+through `json.dumps` correctly (plain `dict[str, TypedDict]`, no custom
+types).

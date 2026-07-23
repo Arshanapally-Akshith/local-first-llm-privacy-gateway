@@ -116,6 +116,18 @@ class CellReport(TypedDict):
     window_tax_ms: StatsSummary | None
     window_tax_percent: StatsSummary | None
     tier_hit: dict[str, float]
+    per_tier_ttft_with_window_ms: dict[str, StatsSummary]
+    """BUILD.md Phase 7 DoD: "Per-tier p50/p95/p99 + tier-hit
+    distribution" -- TTFT (with window), the one latency BUILD.md
+    itself singles out as "the only latency a human perceives", grouped
+    by `tier_hit` class (Phase 4's own per-span tier attribution,
+    aggregated the same way `tier_hit` already is). Keyed identically
+    to `tier_hit` -- only classes with at least one completed request
+    in this cell appear; a class with zero samples is simply absent,
+    never a `None` placeholder (mirrors `tier_hit`'s own "finding
+    nothing is normal" contract). Deliberately TTFT-only, not extended
+    to `total_latency_ms` or any other metric -- see `docs/DECISIONS.md`,
+    2026-07-23, "Phase 7 Task 3: per-tier TTFT breakdown"."""
 
 
 class LatencyReport(TypedDict):
@@ -153,6 +165,26 @@ def _tier_hit_distribution(raw: CellRawResults) -> dict[str, float]:
     return {klass: count / total for klass, count in sorted(counts.items())}
 
 
+def _per_tier_ttft_with_window(raw: CellRawResults) -> dict[str, StatsSummary]:
+    """BUILD.md Phase 7 DoD: "Per-tier p50/p95/p99" -- group this
+    cell's already-completed requests by `tier_hit_class` (the same
+    per-request attribute `_tier_hit_distribution()` above already
+    aggregates into fractions) and summarize each non-empty group's
+    `client_ttft_ms` independently, reusing the one `summarize()`
+    implementation every other statistic in this report already uses.
+
+    A class with zero samples in this cell is simply absent from the
+    returned dict -- never a `None`/zero placeholder, and never a call
+    to `summarize()` on an empty list (which raises) -- the identical
+    "absent, not null" contract `_tier_hit_distribution()` already
+    follows.
+    """
+    by_class: dict[str, list[float]] = {}
+    for measurement in raw.measurements:
+        by_class.setdefault(measurement.tier_hit_class, []).append(measurement.client_ttft_ms)
+    return {klass: summarize(samples) for klass, samples in sorted(by_class.items())}
+
+
 def _build_cell_report(
     workload: LatencyWorkload, concurrency: int, raw: CellRawResults
 ) -> CellReport:
@@ -164,6 +196,8 @@ def _build_cell_report(
     timed out or failed (`n == 0`); `summarize()` itself still raises
     on an empty list, so this function guards the call rather than
     letting a fully-failed cell crash the whole report.
+    `per_tier_ttft_with_window_ms` follows the same "absent, not null"
+    discipline per tier class instead (see `_per_tier_ttft_with_window()`).
     """
     measurements = raw.measurements
     window_taxes = [m.window_tax_ms for m in measurements if m.window_tax_ms is not None]
@@ -193,6 +227,7 @@ def _build_cell_report(
         window_tax_ms=summarize(window_taxes) if window_taxes else None,
         window_tax_percent=summarize(window_tax_percents) if window_tax_percents else None,
         tier_hit=_tier_hit_distribution(raw),
+        per_tier_ttft_with_window_ms=_per_tier_ttft_with_window(raw),
     )
 
 
@@ -394,7 +429,10 @@ def render_markdown(report: LatencyReport) -> str:
         "Each latency column reports `mean / p95 / p99 (cv)` in ms, computed only over "
         "requests that actually completed (`n`) -- `timeout`/`error` counts are reported "
         "alongside, never folded into the percentiles. `tier_hit` is a categorical "
-        "distribution over completed requests only.",
+        "distribution over completed requests only. Each workload's table is followed by "
+        "a per-tier TTFT breakdown (BUILD.md Phase 7 DoD: \"Per-tier p50/p95/p99\") -- TTFT "
+        "with the window, grouped by which tier resolved the request, shown only for tier "
+        "classes with at least one completed sample in that cell.",
         "",
     ]
 
@@ -428,6 +466,20 @@ def render_markdown(report: LatencyReport) -> str:
                 f"{_format_stats(cell['total_latency_ms'])} | {tier_hit} |"
             )
         lines.append("")
+
+        per_tier_rows = [
+            (cell["concurrency"], klass, stats)
+            for cell in sorted(workload_cells, key=lambda c: c["concurrency"])
+            for klass, stats in cell["per_tier_ttft_with_window_ms"].items()
+        ]
+        if per_tier_rows:
+            lines.append("Per-tier TTFT (with window) — only populated tier classes shown:")
+            lines.append("")
+            lines.append("| Concurrency | Tier class | TTFT (with window) |")
+            lines.append("|---|---|---|")
+            for concurrency, klass, stats in per_tier_rows:
+                lines.append(f"| {concurrency} | {klass} | {_format_stats(stats)} |")
+            lines.append("")
 
     return "\n".join(lines) + "\n"
 
