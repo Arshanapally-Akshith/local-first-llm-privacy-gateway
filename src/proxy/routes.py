@@ -48,6 +48,7 @@ import json
 import random
 from collections.abc import AsyncIterator
 from contextlib import AbstractAsyncContextManager
+from datetime import datetime
 
 import httpx
 from fastapi import APIRouter, Depends, HTTPException, Request, Response
@@ -56,6 +57,7 @@ from fastapi.responses import StreamingResponse
 from src.core.clock import Clock, get_clock
 from src.core.exceptions import UpstreamError
 from src.core.fail_mode import FailMode, get_fail_mode
+from src.core.logging import get_gateway_logger, log_event
 from src.core.types import CorrelationId, SessionId, new_correlation_id
 from src.detect.tier2.gliner_model import get_tier2_model
 from src.detect.tier2.model import Tier2Model
@@ -81,6 +83,17 @@ router = APIRouter()
 
 _CHAT_COMPLETIONS_PATH = "/v1/chat/completions"
 _SESSION_ID_HEADER = "X-Session-Id"
+_CORRELATION_ID_HEADER = "X-Correlation-Id"
+"""Diagnostic-only response header (Phase 7): exposes the per-request
+`correlation_id` `chat_completions()` already generates internally for
+log correlation. Added specifically so the latency harness
+(`latency/runner/`), which drives the gateway as a real subprocess over
+real sockets rather than in-process, can match a request it just sent
+to that request's own structured log lines in the gateway's captured
+log file — there is no other way for an out-of-process caller to learn
+which correlation_id a given response corresponds to. Carries no
+authentication or authorization meaning, same as `X-Session-Id`
+(see this module's own docstring)."""
 
 _HOP_BY_HOP_HEADERS = frozenset(
     {
@@ -178,6 +191,17 @@ def _translate_upstream_connection_failure(exc: httpx.TransportError) -> Upstrea
     return UpstreamError("could not connect to upstream", status_code=502)
 
 
+def _epoch_ms(moment: datetime) -> float:
+    """Epoch milliseconds for a `Clock.now()` result — the plain,
+    directly-diffable form `log_event`'s `timestamp_ms` parameter exists
+    for (see that parameter's own docstring). Kept as a private helper
+    here rather than on `Clock` itself: nothing about "render as epoch
+    milliseconds" is a clock concern — every other caller of `Clock.now()`
+    in this codebase works with the `datetime` directly.
+    """
+    return moment.timestamp() * 1000
+
+
 def _has_content_slot(delta: ContentDelta) -> bool:
     """Whether `delta`'s envelope has a `choices[0].delta.content` key
     at all — the role-establishing and plain content chunks do; the
@@ -244,7 +268,9 @@ async def chat_completions(
         return await _forward_non_streaming(
             client, sanitized_body, session, key_provider, correlation_id
         )
-    return await _start_streaming(client, sanitized_body, session, key_provider, correlation_id)
+    return await _start_streaming(
+        client, sanitized_body, session, key_provider, correlation_id, clock
+    )
 
 
 async def _forward_non_streaming(
@@ -261,9 +287,12 @@ async def _forward_non_streaming(
     return Response(
         content=_rehydrated_content(upstream_response, session, key_provider, correlation_id),
         status_code=upstream_response.status_code,
-        headers=_forwardable_headers(
-            upstream_response.headers, also_drop=frozenset({"content-length"})
-        ),
+        headers={
+            **_forwardable_headers(
+                upstream_response.headers, also_drop=frozenset({"content-length"})
+            ),
+            _CORRELATION_ID_HEADER: correlation_id,
+        },
     )
 
 
@@ -302,6 +331,7 @@ async def _start_streaming(
     session: Session,
     key_provider: KeyProvider,
     correlation_id: CorrelationId,
+    clock: Clock,
 ) -> StreamingResponse:
     """Open the upstream connection before returning a StreamingResponse.
 
@@ -319,9 +349,12 @@ async def _start_streaming(
     except httpx.TransportError as exc:
         raise _translate_upstream_connection_failure(exc) from exc
     return StreamingResponse(
-        _generate_sse(stream_ctx, upstream_response, session, key_provider, correlation_id),
+        _generate_sse(stream_ctx, upstream_response, session, key_provider, correlation_id, clock),
         media_type="text/event-stream",
-        headers=_forwardable_headers(upstream_response.headers),
+        headers={
+            **_forwardable_headers(upstream_response.headers),
+            _CORRELATION_ID_HEADER: correlation_id,
+        },
     )
 
 
@@ -331,6 +364,7 @@ async def _generate_sse(
     session: Session,
     key_provider: KeyProvider,
     correlation_id: CorrelationId,
+    clock: Clock,
 ) -> AsyncIterator[str]:
     def _rehydrate_buffer(buffered_text: str) -> str:
         return rehydrate(buffered_text, session, key_provider, correlation_id=correlation_id)
@@ -339,14 +373,46 @@ async def _generate_sse(
     window = SlidingWindow(lookahead=REQUIRED_WINDOW_LOOKAHEAD, transform=_rehydrate_buffer)
     last_content_delta: ContentDelta | None = None
     pending_structural_delta: ContentDelta | None = None
+    logger = get_gateway_logger()
+    upstream_first_chunk_logged = False
+    window_first_release_logged = False
+
+    def _log_window_first_release_once() -> None:
+        # Phase 7 latency harness: the first time the window actually
+        # releases bytes toward the client is the window-observed TTFT
+        # instant. Logged at most once per response — every branch below
+        # that can release non-empty text calls this, and only the
+        # first call across all of them does anything.
+        nonlocal window_first_release_logged
+        if not window_first_release_logged:
+            log_event(
+                logger,
+                "latency.window_first_release",
+                correlation_id=correlation_id,
+                timestamp_ms=_epoch_ms(clock.now()),
+            )
+            window_first_release_logged = True
 
     try:
         async for text_chunk in upstream_response.aiter_text():
+            if not upstream_first_chunk_logged:
+                # Phase 7 latency harness: raw upstream TTFB, independent
+                # of whether this first chunk carries content — the
+                # window/rehydration tax is measured against this point,
+                # not against a content-bearing chunk specifically.
+                log_event(
+                    logger,
+                    "latency.upstream_first_chunk",
+                    correlation_id=correlation_id,
+                    timestamp_ms=_epoch_ms(clock.now()),
+                )
+                upstream_first_chunk_logged = True
             for sse_event in parser.feed(text_chunk):
                 parsed = parse_event(sse_event)
                 if isinstance(parsed, DoneMarker):
                     released = window.flush()
                     if released and last_content_delta is not None:
+                        _log_window_first_release_once()
                         yield serialize_content_delta(last_content_delta, released)
                     if pending_structural_delta is not None:
                         yield serialize_content_delta(
@@ -358,6 +424,7 @@ async def _generate_sse(
                     last_content_delta = parsed
                     released = window.feed(parsed.content)
                     if released:
+                        _log_window_first_release_once()
                         yield serialize_content_delta(parsed, released)
                 else:
                     # Structural event with no content slot (the
@@ -404,11 +471,13 @@ async def _generate_sse(
             last_content_delta = parsed
             released = window.feed(parsed.content)
             if released:
+                _log_window_first_release_once()
                 yield serialize_content_delta(parsed, released)
         else:
             pending_structural_delta = parsed
     final = window.flush()
     if final and last_content_delta is not None:
+        _log_window_first_release_once()
         yield serialize_content_delta(last_content_delta, final)
     if pending_structural_delta is not None:
         yield serialize_content_delta(pending_structural_delta, pending_structural_delta.content)

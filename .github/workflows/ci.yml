@@ -28,12 +28,13 @@ jobs:
       - name: Lint (ruff)
         run: ruff check --line-length 100 .
 
-      - name: Type-check (mypy --strict on src, app, benchmarks, and adversarial)
+      - name: Type-check (mypy --strict on src, app, benchmarks, adversarial, and latency)
         run: |
           mypy --strict src
           mypy --strict app
           mypy --strict benchmarks
           mypy --strict adversarial
+          mypy --strict latency
           mypy tests
 
       - name: Test (pytest)

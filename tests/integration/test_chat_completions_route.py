@@ -10,6 +10,7 @@ unreachable host or a real slow one.
 """
 
 import json
+import logging
 from collections.abc import Iterator, Sequence
 
 import httpx
@@ -450,3 +451,95 @@ def test_person_span_round_trips_through_the_full_http_request_response_cycle() 
 
     assert response.status_code == 200
     assert response.json()["choices"][0]["message"]["content"] == content
+
+
+def test_non_streaming_response_carries_x_correlation_id_header() -> None:
+    """Phase 7: the latency harness drives the gateway as a real
+    subprocess over real sockets, not in-process — this header is the
+    only way it can match a response it just received back to that
+    request's own structured log lines (see
+    src/proxy/routes.py::_CORRELATION_ID_HEADER)."""
+    _override_with_mock_upstream()
+    client = TestClient(app, headers={"X-Session-Id": "test-session-1"})
+
+    response = client.post(
+        "/v1/chat/completions",
+        json={"model": "gpt-4", "messages": [{"role": "user", "content": "hi"}], "stream": False},
+    )
+
+    assert response.status_code == 200
+    correlation_id = response.headers.get("x-correlation-id")
+    assert correlation_id
+    assert len(correlation_id) > 0
+
+
+def test_streaming_response_carries_x_correlation_id_header() -> None:
+    _override_with_mock_upstream()
+    client = TestClient(app, headers={"X-Session-Id": "test-session-1"})
+
+    response = client.post(
+        "/v1/chat/completions",
+        json={"model": "gpt-4", "messages": [{"role": "user", "content": "hi"}], "stream": True},
+    )
+
+    assert response.status_code == 200
+    assert response.headers.get("x-correlation-id")
+
+
+def test_streaming_emits_upstream_first_chunk_and_window_first_release_once(
+    captured_records: list[logging.LogRecord],
+) -> None:
+    """Phase 7 instrumentation: exactly one `latency.upstream_first_chunk`
+    and one `latency.window_first_release` event per streamed response,
+    both carrying the same `correlation_id` as the response's own
+    `X-Correlation-Id` header and a numeric `timestamp_ms` — what
+    `latency/runner/log_capture.py` depends on to compute the window's
+    TTFT tax."""
+    _override_with_mock_upstream()
+    client = TestClient(app, headers={"X-Session-Id": "test-session-1"})
+
+    response = client.post(
+        "/v1/chat/completions",
+        json={
+            "model": "gpt-4",
+            "messages": [{"role": "user", "content": "hello there"}],
+            "stream": True,
+        },
+    )
+
+    assert response.status_code == 200
+    correlation_id = response.headers["x-correlation-id"]
+
+    upstream_events = [
+        r for r in captured_records if getattr(r, "event", None) == "latency.upstream_first_chunk"
+    ]
+    release_events = [
+        r for r in captured_records if getattr(r, "event", None) == "latency.window_first_release"
+    ]
+    assert len(upstream_events) == 1
+    assert len(release_events) == 1
+    assert upstream_events[0].correlation_id == correlation_id  # type: ignore[attr-defined]
+    assert release_events[0].correlation_id == correlation_id  # type: ignore[attr-defined]
+    assert isinstance(upstream_events[0].timestamp_ms, float)  # type: ignore[attr-defined]
+    assert isinstance(release_events[0].timestamp_ms, float)  # type: ignore[attr-defined]
+    # The window can only release what upstream already sent it.
+    assert release_events[0].timestamp_ms >= upstream_events[0].timestamp_ms  # type: ignore[attr-defined]
+
+
+def test_non_streaming_request_emits_neither_latency_event(
+    captured_records: list[logging.LogRecord],
+) -> None:
+    """The two new events are streaming-only (TTFT has no meaning for a
+    single blocking response) — a non-streaming request must not emit
+    either one."""
+    _override_with_mock_upstream()
+    client = TestClient(app, headers={"X-Session-Id": "test-session-1"})
+
+    client.post(
+        "/v1/chat/completions",
+        json={"model": "gpt-4", "messages": [{"role": "user", "content": "hi"}], "stream": False},
+    )
+
+    events = {getattr(r, "event", None) for r in captured_records}
+    assert "latency.upstream_first_chunk" not in events
+    assert "latency.window_first_release" not in events

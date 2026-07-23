@@ -19,7 +19,7 @@
 
 param(
     [Parameter(Position = 0)]
-    [ValidateSet("install", "run", "mock", "test", "lint", "typecheck", "check", "rehydration-fidelity", "bench", "adversarial")]
+    [ValidateSet("install", "run", "mock", "test", "lint", "typecheck", "check", "rehydration-fidelity", "bench", "adversarial", "latency-pilot", "latency-bench")]
     [string]$Task = "check"
 )
 
@@ -54,6 +54,7 @@ switch ($Task) {
         mypy --strict app
         mypy --strict benchmarks
         mypy --strict adversarial
+        mypy --strict latency
         mypy tests
     }
     "check" {
@@ -65,6 +66,7 @@ switch ($Task) {
         mypy --strict app
         mypy --strict benchmarks
         mypy --strict adversarial
+        mypy --strict latency
         mypy tests
         pytest tests
     }
@@ -93,5 +95,32 @@ switch ($Task) {
         # transliterated_names class; deliberately not part of `check`
         # for the same reason `bench` isn't.
         python -m adversarial.runner.run
+    }
+    "latency-pilot" {
+        # BUILD.md, Phase 7: a small calibration pass (20 reps/cell)
+        # across all 8 workloads x 5 concurrency levels (1/2/4/8/16),
+        # spawning the real gateway + mock upstream as uvicorn
+        # subprocesses over real sockets (latency/runner/process_harness.py -
+        # deliberately not the in-process TestClient pattern `bench`/
+        # `adversarial` use; see latency/__init__.py). Prints each
+        # cell's mean latency and a projected full-run wall-clock
+        # estimate; writes no artifact. Run this before `latency-bench`
+        # to decide whether --repetitions needs adjusting on this
+        # machine - some workloads (e.g. field_walker_heavy, which
+        # makes 5 separate Tier-2 calls per request) have been observed
+        # to take tens of seconds per request at concurrency 4+.
+        python -m latency.runner.run --pilot-only
+    }
+    "latency-bench" {
+        # Regenerates latency/results/latest.json and latest.md -
+        # BUILD.md, Phase 7: cold start (10 fresh processes) plus the
+        # full 40-cell matrix at 200 reps/cell by default. Real model
+        # inference, real concurrent load against real subprocesses -
+        # can take a long time (see `latency-pilot` above); deliberately
+        # not part of `check` for the same reason `bench`/`adversarial`
+        # aren't. Pass -Repetitions via the underlying module directly
+        # if 200/cell is impractical on this machine, e.g.:
+        #   python -m latency.runner.run --repetitions 50
+        python -m latency.runner.run
     }
 }

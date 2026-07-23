@@ -3485,3 +3485,182 @@ commands (`mypy --strict` on `app`/`benchmarks`/`adversarial`, `mypy
 tests`, `pytest tests`) all pass with no regressions. No production
 code, architecture, or behavior changed anywhere in this task —
 documentation, tracked artifacts, and developer tooling only.
+
+## 2026-07-23 — Phase 7 Task 2: the latency harness drives a real subprocess over real sockets, not the in-process TestClient pattern the other three runners share
+
+**Decision.** `latency/runner/process_harness.py` spawns the real
+gateway (`app.main:app`) and the real mock upstream
+(`src.mock_upstream.main:app`) as genuine `uvicorn` subprocesses on
+real TCP sockets (ports 8180/8181, deliberately distinct from
+`tasks.ps1 run`/`mock`'s 8080/8081 so this harness never collides with
+a developer's own running dev instances), health-checks both, and
+drives load against them with a real `httpx.Client` from a
+`concurrent.futures.ThreadPoolExecutor` bounded at the target
+concurrency level. `benchmarks/runner/run.py`, `adversarial/runner/run.py`,
+and `rehydration_fidelity/runner/run.py` all instead drive the FastAPI
+app in-process via `TestClient`/`httpx.ASGITransport` — no real socket,
+no separate process, no port management.
+
+**Alternatives considered.**
+1. **In-process, matching the other three runners exactly** — attach a
+   capturing `logging.Handler` to the gateway logger the way
+   `adversarial/runner/gateway_client.py`'s `CapturingTransport`
+   captures request bodies, and read per-request tier-hit/timing data
+   straight off it. Simpler (no subprocess lifecycle, no log-file
+   parsing, no port collisions to avoid), and reuses an already-proven
+   pattern.
+2. **Real subprocess, real sockets** (chosen) — the gateway and mock
+   run exactly as a real deployment would, reached over a real loopback
+   socket with real HTTP/1.1 chunked-transfer framing.
+
+**Why real subprocesses.** This is the one runner in the repository
+whose entire purpose is measuring *how long something takes*, not
+*what the system decided* — and an in-process ASGI transport is not a
+neutral stand-in for that specific question the way it is for
+correctness. `benchmarks`/`adversarial`/`rehydration_fidelity` only
+ever need to know whether a span was caught, a bypass worked, or a name
+round-tripped; nothing about *timing* is part of what those three
+assert, so the faster, simpler in-process path is strictly better for
+them. Phase 7 is different: BUILD.md's own named trap is "Python GIL +
+CPU inference at 4 concurrent requests is a different distribution
+entirely," which is a real-process, real-scheduling phenomenon — an
+in-process harness driving concurrent coroutines through one shared
+event loop in the *test's own process* risks measuring the test
+process's own scheduling behavior, not the gateway's, and TTFT
+specifically is defined in this project as "the only latency a human
+perceives" (BUILD.md), which is a claim about real socket/network
+timing that an in-memory `ASGITransport` (no real bytes on a real wire)
+cannot honestly stand in for.
+
+**Cost of this choice, paid deliberately.** Process lifecycle
+management (`process_harness.py`), a readiness-probe workaround for the
+mock upstream (it has no `/health` endpoint — see the second entry
+below), and log-file parsing keyed by a value
+(`correlation_id`) the gateway previously never exposed to a caller at
+all (see the third entry below) instead of just reading a
+`logging.Handler`'s in-memory records. Every one of these exists solely
+because a real, separate process cannot be introspected the way an
+in-process object can.
+
+**Consequence.** Two small, diagnostic-only additions to `src/`
+(detailed in the next two entries) exist *only* because of this choice
+— an in-process harness would have needed neither.
+
+## 2026-07-23 — Phase 7 Task 2: `X-Correlation-Id` response header
+
+**Decision.** `src/proxy/routes.py` now sets an `X-Correlation-Id`
+response header on both the streaming and non-streaming response
+paths, carrying the exact `correlation_id` `chat_completions()` already
+generates internally (`new_correlation_id()`) for log correlation.
+Diagnostic-only: it authenticates nothing and authorizes nothing, the
+same status `X-Session-Id` already has per this module's own docstring.
+
+**Why.** The real-subprocess harness (previous entry) has no way to
+learn which `correlation_id` a given HTTP response corresponds to
+otherwise — that value has never left the process before this change.
+Without it, the harness could still time responses from the outside,
+but could not join a specific response back to that exact request's own
+lines in the gateway's captured structured-log file, which is the only
+way to recover the two new internal timing events (next entry) and the
+existing per-span `tier` field `pipeline.span_sanitized` already emits
+(Phase 4) for the tier-hit distribution.
+
+**Alternative considered and rejected.** Skip the header; report only
+client-observed TTFT (with the window) and total latency, and drop the
+window-tax measurement (`TTFT_without`, `window_tax_ms`,
+`window_tax_percent`) entirely. Rejected: BUILD.md's Phase 7 explicitly
+requires "TTFT reported separately from total, with and without the
+window" — dropping the "without" half would silently fail that
+requirement rather than pay a one-header cost to meet it.
+
+## 2026-07-23 — Phase 7 Task 2: two new structured log events for TTFT-without-window and the window's own release instant
+
+**Decision.** `src/proxy/routes.py::_generate_sse` now logs two new
+events, at most once per streamed response, through the existing
+`log_event()`/`redact_safe()` API (no new PII surface — both reuse
+`log_event`'s existing `timestamp_ms` field, added to
+`src/core/logging.py`'s `_ALLOWED_FIELDS` for this purpose):
+
+- `latency.upstream_first_chunk` — logged on the first chunk received
+  from the upstream via `aiter_text()`, regardless of whether it
+  carries content. This is the raw upstream TTFB the window's own tax
+  is measured against.
+- `latency.window_first_release` — logged the first time
+  `SlidingWindow.feed()`/`.flush()` actually releases non-empty text
+  toward the client, across every code path that can do so (the normal
+  per-chunk release, the `[DONE]`-triggered flush, and the mid-stream-
+  drop flush-and-terminate path) — a small `_log_window_first_release_once()`
+  closure over a `nonlocal` flag keeps the "log at most once" rule in
+  one place rather than three near-identical checks.
+
+Both use `timestamp_ms` (epoch milliseconds from the request's own
+injected `Clock`, never a bare `time.time()` inline — CLAUDE.md's DI
+rule for anything with a clock) rather than relying on the log line's
+own default `timestamp` field, so the harness can diff two absolute
+instants directly without parsing a locale/format-dependent rendered
+string.
+
+**Why the raw upstream chunk, not the first content-bearing one.** The
+window/rehydration tax this phase measures is "how much longer after
+upstream responds does it take before we release anything," which
+requires the upstream reference point to be upstream's own true first
+byte — filtering to only content-bearing chunks would silently exclude
+whatever role-establishing or otherwise-empty chunk actually arrived
+first, understating the true elapsed gap.
+
+**Alternative considered and rejected.** Compute `window_tax_ms`/
+`window_tax_percent` from the client's own two socket-level
+observations only (first byte received, request sent), never touching
+`src/`. Rejected: the client only ever sees the *result* of the window
+already having decided what's safe to release — it cannot distinguish
+"upstream was slow" from "our own window/rehydration work was slow"
+from the outside, which is exactly the distinction this measurement
+exists to make. Only an internal, gateway-side timestamp at the
+upstream boundary makes that decomposition possible at all.
+
+**Non-streaming requests emit neither event** (there is no TTFT
+concept for a single blocking response) — proven by
+`tests/integration/test_chat_completions_route.py::test_non_streaming_request_emits_neither_latency_event`.
+
+## 2026-07-23 — Phase 7 Task 2: percentile method fixed once, before any workload was measured
+
+**Decision.** `latency/runner/stats.py::summarize()` uses linear
+interpolation between the two nearest ranks for p95/p99 (the method
+NumPy's default `numpy.percentile` and Excel's `PERCENTILE.INC` use),
+implemented once and reused for every metric this harness reports —
+TTFT with the window, TTFT without it, total latency, `window_tax_ms`,
+`window_tax_percent`, and the cold-start distribution.
+
+**Why fixed in advance, and why one implementation.** Mirrors
+`docs/DECISIONS.md`'s own 2026-07-22 entry fixing the Phase 5
+benchmark's exact-span/exact-type matching criterion before any arm was
+scored, for the identical reason stated there: picking a percentile
+method *after* seeing which one makes a number look better is exactly
+the kind of after-the-fact methodology change CLAUDE.md's Forbidden
+Actions rules out ("change the span-matching criterion after seeing
+results" — the latency-harness equivalent of that rule is the
+percentile method). A second, slightly different percentile
+implementation for even one of these metrics would make two numbers in
+the same report silently incomparable — CLAUDE.md's "no duplicated
+logic" rule, applied to statistics rather than detection.
+
+## 2026-07-23 — Phase 7 Task 2: EMAIL and UPI excluded from every latency workload
+
+**Decision.** None of the eight fixed workloads in
+`latency/workloads/definitions.py` embed an EMAIL or UPI value, and a
+unit test (`tests/unit/test_latency_workloads.py::test_no_workload_embeds_email_or_upi`)
+asserts none ever will by accident.
+
+**Why.** Neither entity type has a registered surrogate domain today
+(`src/pipeline/sanitize.py`'s own docstring; `docs/LIMITATIONS.md`) —
+detecting either raises `SurrogateDomainError`, a 500, before any of
+the TTFT/rehydration behaviour this harness exists to measure ever
+runs. Discovered by running all eight draft workloads against the real
+gateway in-process before wiring up the subprocess harness at all
+(cheap to catch early): the initial `mixed_dense`/`field_walker_heavy`
+drafts included an EMAIL value and 500'd immediately. Replaced with
+IFSC and VEHICLE_REG, both of which do have registered domains
+(`src/surrogate/domains/`) and were already otherwise-uncovered
+Tier-1 types in the workload matrix. A known, disclosed repository gap,
+not a latency-harness bug to route around quietly — the module-level
+comment in `definitions.py` says so explicitly.

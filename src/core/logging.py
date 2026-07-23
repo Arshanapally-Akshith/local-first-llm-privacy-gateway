@@ -34,6 +34,7 @@ _ALLOWED_FIELDS: Final[tuple[str, ...]] = (
     "tier",
     "surrogate",
     "latency_ms",
+    "timestamp_ms",
 )
 """Every field name the formatter will ever render. Anything attached to
 a LogRecord under a different name — including via a raw, undisciplined
@@ -104,6 +105,7 @@ def log_event(
     session_id: str | None = None,
     redacted: RedactedEntity | None = None,
     latency_ms: float | None = None,
+    timestamp_ms: float | None = None,
 ) -> None:
     """Emit one structured log line through the PII-safe formatter.
 
@@ -113,6 +115,18 @@ def log_event(
     discipline is load-bearing and worth stating explicitly. Every other
     field is either typed/bounded (`redacted`) or opaque
     (`correlation_id`, `session_id`).
+
+    `timestamp_ms` (epoch milliseconds, from the caller's own injected
+    `Clock` — never a bare `time.time()` inline) exists for the Phase 7
+    latency harness: `src/proxy/routes.py`'s `latency.upstream_first_chunk`
+    and `latency.window_first_release` events use it so the harness,
+    reading these two absolute timestamps back out of a captured log
+    file, can compute the sliding window's TTFT tax as a plain
+    subtraction — without needing to also parse the log line's own
+    `timestamp` field's default (locale/format-dependent) string
+    rendering. Unrelated to `latency_ms`, which records an already-
+    computed *duration* (e.g. `startup.tier2_model_warmed`); this field
+    is a point in time.
 
     The underlying stdlib call passes `event` via `extra`, not as the
     LogRecord message, and with an empty message string — so even this
@@ -125,6 +139,8 @@ def log_event(
         fields.update(redacted)
     if latency_ms is not None:
         fields["latency_ms"] = latency_ms
+    if timestamp_ms is not None:
+        fields["timestamp_ms"] = timestamp_ms
     logger.info("", extra=fields)
 
 
