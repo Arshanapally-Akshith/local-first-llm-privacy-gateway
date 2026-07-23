@@ -1,7 +1,7 @@
 """The Phase 7 latency harness entrypoint.
 
 Run with:
-    python -m latency.runner.run [--repetitions N] [--pilot-only]
+    python -m latency.runner.run [--repetitions N] [--request-timeout SECONDS] [--pilot-only]
 
 Spawns the real gateway (`app.main:app`) and the real mock upstream
 (`src.mock_upstream.main:app`) as `uvicorn` subprocesses over real
@@ -26,6 +26,17 @@ committed run to decide whether `--repetitions` needs adjusting for
 the machine actually running it, rather than the harness silently
 guessing (or silently self-adjusting) a repetition count on its own.
 
+A per-request timeout is a measured, reported *outcome* of a cell, not
+a fatal error that aborts the whole run — a real pilot run hit the
+previous fixed 60s timeout on `multiturn_5` at concurrency=8 and took
+the entire run down with it. See `latency/runner/measure.py`'s module
+docstring and `docs/DECISIONS.md` (2026-07-23, "Phase 7 Task 2
+follow-up") for the investigation and the fix: `--request-timeout`
+(default `measure.DEFAULT_REQUEST_TIMEOUT_S`) is now configurable, and
+every `CellReport` below carries its own `timeout_count`/`error_count`
+alongside `n` (successes) — excluded from every latency percentile,
+never silently dropped.
+
 Like the other three runners, this module does not touch a top-level
 `README.md` — Phase 8 owns assembling that.
 """
@@ -40,7 +51,7 @@ from pathlib import Path
 from typing import Final, TypedDict
 
 from latency.runner.log_capture import find_latency_ms
-from latency.runner.measure import RequestMeasurement, run_cell
+from latency.runner.measure import DEFAULT_REQUEST_TIMEOUT_S, CellRawResults, run_cell
 from latency.runner.process_harness import running_gateway_alone, running_gateway_and_mock
 from latency.runner.stats import StatsSummary, summarize
 from latency.workloads.definitions import WORKLOADS
@@ -64,6 +75,7 @@ def _fresh_process_log_dir() -> Path:
     opposed to `TemporaryDirectory`) always makes."""
     return Path(tempfile.mkdtemp(prefix="latency_harness_"))
 
+
 CONCURRENCY_LEVELS: Final[tuple[int, ...]] = (1, 2, 4, 8, 16)
 PILOT_REPETITIONS: Final[int] = 20
 WARMUP_REPETITIONS: Final[int] = 10
@@ -76,7 +88,13 @@ _CAVEAT: Final[str] = (
     "traffic (ARCHITECTURE.md, 'The cascade'). Every row below states its "
     "own concurrency level; this artifact never reports a p99 without one, "
     "per BUILD.md Phase 7. Cold start (n=10, a fresh process each time) is "
-    "reported separately and is never folded into any steady-state row."
+    "reported separately and is never folded into any steady-state row. A "
+    "request that timed out (or otherwise failed to complete) within this "
+    "run's --request-timeout ceiling is excluded from every latency "
+    "percentile below and counted instead in that cell's own "
+    "timeout_count/error_count -- a cell with a nonzero count completed "
+    "fewer than n requests and that is itself part of the finding, not a "
+    "gap silently papered over."
 )
 
 
@@ -84,10 +102,17 @@ class CellReport(TypedDict):
     workload: str
     concurrency: int
     n: int
+    """Successful requests actually summarized below -- may be less
+    than `attempted` when `timeout_count`/`error_count` is nonzero."""
+    attempted: int
+    """Post-warmup requests this cell actually tried: `n` +
+    `timeout_count` + `error_count`."""
+    timeout_count: int
+    error_count: int
     warmup_discarded: int
-    ttft_with_window_ms: StatsSummary
-    ttft_without_window_ms: StatsSummary
-    total_latency_ms: StatsSummary
+    ttft_with_window_ms: StatsSummary | None
+    ttft_without_window_ms: StatsSummary | None
+    total_latency_ms: StatsSummary | None
     window_tax_ms: StatsSummary | None
     window_tax_percent: StatsSummary | None
     tier_hit: dict[str, float]
@@ -97,6 +122,7 @@ class LatencyReport(TypedDict):
     commit: str
     concurrency_levels: list[int]
     steady_state_repetitions: int
+    request_timeout_s: float
     cold_start_repetitions: int
     cold_start_ms: StatsSummary
     cells: list[CellReport]
@@ -117,59 +143,87 @@ def _current_commit_hash() -> str:
     return completed.stdout.strip()
 
 
-def _tier_hit_distribution(measurements: list[RequestMeasurement]) -> dict[str, float]:
+def _tier_hit_distribution(raw: CellRawResults) -> dict[str, float]:
+    if not raw.measurements:
+        return {}
     counts: dict[str, int] = {}
-    for measurement in measurements:
+    for measurement in raw.measurements:
         counts[measurement.tier_hit_class] = counts.get(measurement.tier_hit_class, 0) + 1
-    total = len(measurements)
+    total = len(raw.measurements)
     return {klass: count / total for klass, count in sorted(counts.items())}
 
 
 def _build_cell_report(
-    workload: LatencyWorkload, concurrency: int, measurements: list[RequestMeasurement]
+    workload: LatencyWorkload, concurrency: int, raw: CellRawResults
 ) -> CellReport:
+    """Build one cell's report from its raw results.
+
+    Every stats field is `None` when its underlying sample is empty —
+    which for `ttft_with_window_ms`/`ttft_without_window_ms`/
+    `total_latency_ms` only happens if *every* request in this cell
+    timed out or failed (`n == 0`); `summarize()` itself still raises
+    on an empty list, so this function guards the call rather than
+    letting a fully-failed cell crash the whole report.
+    """
+    measurements = raw.measurements
     window_taxes = [m.window_tax_ms for m in measurements if m.window_tax_ms is not None]
     window_tax_percents = [
         m.window_tax_percent for m in measurements if m.window_tax_percent is not None
+    ]
+    ttft_without_window_samples = [
+        m.ttft_without_window_ms for m in measurements if m.ttft_without_window_ms is not None
     ]
     return CellReport(
         workload=workload.name,
         concurrency=concurrency,
         n=len(measurements),
+        attempted=raw.attempted,
+        timeout_count=raw.timeout_count,
+        error_count=raw.error_count,
         warmup_discarded=WARMUP_REPETITIONS,
-        ttft_with_window_ms=summarize([m.client_ttft_ms for m in measurements]),
-        ttft_without_window_ms=summarize(
-            [
-                m.ttft_without_window_ms
-                for m in measurements
-                if m.ttft_without_window_ms is not None
-            ]
+        ttft_with_window_ms=(
+            summarize([m.client_ttft_ms for m in measurements]) if measurements else None
         ),
-        total_latency_ms=summarize([m.client_total_latency_ms for m in measurements]),
+        ttft_without_window_ms=(
+            summarize(ttft_without_window_samples) if ttft_without_window_samples else None
+        ),
+        total_latency_ms=(
+            summarize([m.client_total_latency_ms for m in measurements]) if measurements else None
+        ),
         window_tax_ms=summarize(window_taxes) if window_taxes else None,
         window_tax_percent=summarize(window_tax_percents) if window_tax_percents else None,
-        tier_hit=_tier_hit_distribution(measurements),
+        tier_hit=_tier_hit_distribution(raw),
     )
 
 
 def _run_matrix(
-    gateway_base_url: str, gateway_log_path: Path, repetitions: int
+    gateway_base_url: str,
+    gateway_log_path: Path,
+    repetitions: int,
+    request_timeout_s: float,
 ) -> list[CellReport]:
     """Run every workload at every concurrency level, `repetitions`
     measured requests per cell (plus `WARMUP_REPETITIONS` discarded
     ahead of them) — 8 x 5 = 40 cells, in the same fixed order every
-    time (`WORKLOADS` x `CONCURRENCY_LEVELS`, both fixed tuples)."""
+    time (`WORKLOADS` x `CONCURRENCY_LEVELS`, both fixed tuples).
+
+    A cell with any timeouts/errors is logged loudly but never stops
+    this loop — the next cell always runs regardless of how the
+    previous one went (Phase 7 design follow-up: "continue executing
+    the remaining benchmark cells after a timeout").
+    """
     cells: list[CellReport] = []
     for workload in WORKLOADS:
         for concurrency in CONCURRENCY_LEVELS:
             _logger.info(
-                "running workload=%s concurrency=%d n=%d (+%d warmup)",
+                "running workload=%s concurrency=%d n=%d (+%d warmup, timeout=%.0fs)",
                 workload.name,
                 concurrency,
                 repetitions,
                 WARMUP_REPETITIONS,
+                request_timeout_s,
             )
-            measurements = run_cell(
+            raw = run_cell(
                 gateway_base_url,
                 gateway_log_path,
                 workload,
@@ -177,8 +231,20 @@ def _run_matrix(
                 total_requests=repetitions + WARMUP_REPETITIONS,
                 warmup_requests=WARMUP_REPETITIONS,
                 session_id_prefix=f"latency-{workload.name}-c{concurrency}",
+                request_timeout_s=request_timeout_s,
             )
-            cells.append(_build_cell_report(workload, concurrency, measurements))
+            if raw.timeout_count or raw.error_count:
+                _logger.warning(
+                    "workload=%s concurrency=%d: %d succeeded, %d timed out, %d errored "
+                    "(of %d attempted)",
+                    workload.name,
+                    concurrency,
+                    len(raw.measurements),
+                    raw.timeout_count,
+                    raw.error_count,
+                    raw.attempted,
+                )
+            cells.append(_build_cell_report(workload, concurrency, raw))
     return cells
 
 
@@ -213,7 +279,11 @@ def _measure_cold_start(log_root: Path) -> StatsSummary:
     return summarize(samples)
 
 
-def build_report(*, repetitions: int = DEFAULT_STEADY_STATE_REPETITIONS) -> LatencyReport:
+def build_report(
+    *,
+    repetitions: int = DEFAULT_STEADY_STATE_REPETITIONS,
+    request_timeout_s: float = DEFAULT_REQUEST_TIMEOUT_S,
+) -> LatencyReport:
     """Run the full cold-start section plus the full 40-cell matrix and
     return the complete report.
 
@@ -229,12 +299,13 @@ def build_report(*, repetitions: int = DEFAULT_STEADY_STATE_REPETITIONS) -> Late
     _logger.info("raw process logs for this run: %s", log_root)
     cold_start_ms = _measure_cold_start(log_root)
     with running_gateway_and_mock(log_root / "steady_state") as (gateway, _mock):
-        cells = _run_matrix(gateway.base_url, gateway.stderr_log_path, repetitions)
+        cells = _run_matrix(gateway.base_url, gateway.stderr_log_path, repetitions, request_timeout_s)
 
     return LatencyReport(
         commit=_current_commit_hash(),
         concurrency_levels=list(CONCURRENCY_LEVELS),
         steady_state_repetitions=repetitions,
+        request_timeout_s=request_timeout_s,
         cold_start_repetitions=COLD_START_REPETITIONS,
         cold_start_ms=cold_start_ms,
         cells=cells,
@@ -242,37 +313,46 @@ def build_report(*, repetitions: int = DEFAULT_STEADY_STATE_REPETITIONS) -> Late
     )
 
 
-def run_pilot(repetitions: int) -> None:
+def run_pilot(repetitions: int, request_timeout_s: float = DEFAULT_REQUEST_TIMEOUT_S) -> None:
     """Run the full 40-cell matrix at `PILOT_REPETITIONS` per cell,
-    log each cell's mean latency, and project the full run's wall-clock
-    time by scaling the pilot's own measured elapsed time by the
-    repetition-count ratio. Writes no artifact — purely a human-facing
-    estimate for deciding `--repetitions` before a real committed run.
+    log each cell's mean latency (and any timeouts/errors), and project
+    the full run's wall-clock time by scaling the pilot's own measured
+    elapsed time by the repetition-count ratio. Writes no artifact —
+    purely a human-facing estimate for deciding `--repetitions` (and,
+    now, `--request-timeout`) before a real committed run.
     """
     log_root = _fresh_process_log_dir()
     _logger.info("raw process logs for this pilot run: %s", log_root)
     with running_gateway_and_mock(log_root / "pilot") as (gateway, _mock):
         start = time.perf_counter()
-        cells = _run_matrix(gateway.base_url, gateway.stderr_log_path, PILOT_REPETITIONS)
+        cells = _run_matrix(
+            gateway.base_url, gateway.stderr_log_path, PILOT_REPETITIONS, request_timeout_s
+        )
         pilot_elapsed_s = time.perf_counter() - start
 
     for cell in cells:
+        ttft_mean = cell["ttft_with_window_ms"]["mean"] if cell["ttft_with_window_ms"] else float("nan")
+        total_mean = cell["total_latency_ms"]["mean"] if cell["total_latency_ms"] else float("nan")
         _logger.info(
             "pilot workload=%s concurrency=%d mean_ttft_with_window_ms=%.1f "
-            "mean_total_latency_ms=%.1f",
+            "mean_total_latency_ms=%.1f n=%d timeout=%d error=%d",
             cell["workload"],
             cell["concurrency"],
-            cell["ttft_with_window_ms"]["mean"],
-            cell["total_latency_ms"]["mean"],
+            ttft_mean,
+            total_mean,
+            cell["n"],
+            cell["timeout_count"],
+            cell["error_count"],
         )
     scale = (repetitions + WARMUP_REPETITIONS) / (PILOT_REPETITIONS + WARMUP_REPETITIONS)
     projected_s = pilot_elapsed_s * scale
     _logger.info(
-        "pilot: %.1fs for n=%d/cell across %d cells; projected full run at "
-        "--repetitions=%d: ~%.1fs (~%.1f min)",
+        "pilot: %.1fs for n=%d/cell across %d cells (request_timeout=%.0fs); projected full "
+        "run at --repetitions=%d: ~%.1fs (~%.1f min)",
         pilot_elapsed_s,
         PILOT_REPETITIONS,
         len(cells),
+        request_timeout_s,
         repetitions,
         projected_s,
         projected_s / 60,
@@ -296,6 +376,7 @@ def render_markdown(report: LatencyReport) -> str:
         f"Concurrency levels: {', '.join(str(c) for c in report['concurrency_levels'])}",
         f"Steady-state repetitions per cell: {report['steady_state_repetitions']} "
         f"(+{WARMUP_REPETITIONS} warm-up, discarded)",
+        f"Per-request timeout: {report['request_timeout_s']:.0f}s",
         "",
         f"> {report['caveat']}",
         "",
@@ -310,8 +391,10 @@ def render_markdown(report: LatencyReport) -> str:
         "",
         "## Per-workload, per-concurrency results",
         "",
-        "Each column reports `mean / p95 / p99 (cv)` in ms, except `tier_hit`, "
-        "a categorical distribution (never blended into a latency percentile).",
+        "Each latency column reports `mean / p95 / p99 (cv)` in ms, computed only over "
+        "requests that actually completed (`n`) -- `timeout`/`error` counts are reported "
+        "alongside, never folded into the percentiles. `tier_hit` is a categorical "
+        "distribution over completed requests only.",
         "",
     ]
 
@@ -326,16 +409,18 @@ def render_markdown(report: LatencyReport) -> str:
         lines.append(workload.description)
         lines.append("")
         lines.append(
-            "| Concurrency | n | TTFT (with window) | TTFT (without window) | "
-            "Window tax (ms) | Window tax (%) | Total latency | Tier hit |"
+            "| Concurrency | n (attempted) | timeout | error | TTFT (with window) | "
+            "TTFT (without window) | Window tax (ms) | Window tax (%) | Total latency | "
+            "Tier hit |"
         )
-        lines.append("|---|---|---|---|---|---|---|---|")
+        lines.append("|---|---|---|---|---|---|---|---|---|---|")
         for cell in sorted(workload_cells, key=lambda c: c["concurrency"]):
             tier_hit = ", ".join(
                 f"{klass}={fraction:.2f}" for klass, fraction in sorted(cell["tier_hit"].items())
-            )
+            ) or "n/a"
             lines.append(
-                f"| {cell['concurrency']} | {cell['n']} | "
+                f"| {cell['concurrency']} | {cell['n']} ({cell['attempted']}) | "
+                f"{cell['timeout_count']} | {cell['error_count']} | "
                 f"{_format_stats(cell['ttft_with_window_ms'])} | "
                 f"{_format_stats(cell['ttft_without_window_ms'])} | "
                 f"{_format_stats(cell['window_tax_ms'])} | "
@@ -356,6 +441,18 @@ def main() -> None:
         help="Steady-state repetitions per cell (default: %(default)s).",
     )
     parser.add_argument(
+        "--request-timeout",
+        type=float,
+        default=DEFAULT_REQUEST_TIMEOUT_S,
+        help=(
+            "Per-request httpx timeout in seconds, applied to connect/read/write/pool "
+            "alike (default: %(default)s). A request that exceeds this is recorded as a "
+            "timeout in that cell's timeout_count, not raised as a fatal error -- see "
+            "measure.DEFAULT_REQUEST_TIMEOUT_S for why 120s is a starting point, not a "
+            "guarantee, for every cell in the matrix."
+        ),
+    )
+    parser.add_argument(
         "--pilot-only",
         action="store_true",
         help=(
@@ -366,10 +463,10 @@ def main() -> None:
     args = parser.parse_args()
 
     if args.pilot_only:
-        run_pilot(args.repetitions)
+        run_pilot(args.repetitions, args.request_timeout)
         return
 
-    report = build_report(repetitions=args.repetitions)
+    report = build_report(repetitions=args.repetitions, request_timeout_s=args.request_timeout)
     _RESULTS_DIR.mkdir(parents=True, exist_ok=True)
     _JSON_PATH.write_text(
         json.dumps(report, indent=2, sort_keys=True, ensure_ascii=False) + "\n", encoding="utf-8"

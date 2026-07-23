@@ -3664,3 +3664,82 @@ IFSC and VEHICLE_REG, both of which do have registered domains
 Tier-1 types in the workload matrix. A known, disclosed repository gap,
 not a latency-harness bug to route around quietly — the module-level
 comment in `definitions.py` says so explicitly.
+
+## 2026-07-23 — Phase 7 Task 2 follow-up: a real pilot run's `httpx.ReadTimeout` on `multiturn_5`/concurrency=8 — timeout is a configurable, recorded per-cell outcome, not a fatal error
+
+**What happened.** A real `--pilot-only` run hit `httpx.ReadTimeout` on
+`multiturn_5` at concurrency=8 and the exception propagated all the way
+up through `run_cell` → `_run_matrix` → `run_pilot`, aborting the
+entire 40-cell run and discarding every measurement already collected
+for the cells that ran before it.
+
+**Root cause, investigated before any fix.** Two separate facts,
+deliberately not conflated:
+
+1. `latency/runner/measure.py`'s `_REQUEST_TIMEOUT_S` was a single,
+   unvalidated `60.0` constant, applied identically to every workload
+   and concurrency level — chosen while building the harness, before
+   any cell had been measured at concurrency above 4. A benchmark-
+   configuration gap, not a gateway defect.
+2. The *reason* a request can legitimately take longer than 60s at all
+   is real: `chat_completions()` (`src/proxy/routes.py`) calls
+   `sanitize()` synchronously, inline, inside an `async def` route,
+   with no thread/executor offload. `uvicorn` runs as a single process
+   with one event loop (no `--workers`), so every concurrently-
+   connected request's CPU-bound detection work fully serializes on
+   that one event loop — a request's true wait time scales with how
+   many *other* requests are already queued ahead of it, not just its
+   own cost. `multiturn_5` (10 messages, several requiring separate
+   Tier-2 calls) at concurrency=8 with the pilot's own
+   `20 + WARMUP_REPETITIONS(10) = 30` total requests per cell pushed a
+   tail request's queueing delay past 60s. This is a real, disclosed
+   gateway characteristic (already flagged in the Task 2 review before
+   this pilot run), not something this fix touches.
+
+**Fix implemented (measurement-only, per explicit instruction not to
+touch gateway concurrency/threading).**
+
+1. `_REQUEST_TIMEOUT_S` replaced with `measure.DEFAULT_REQUEST_TIMEOUT_S
+   = 120.0`, documented in place as a considered starting point informed
+   by the pilot's own concurrency=1/4 numbers, not a value expected to
+   survive every one of the 40 cells at n=200 — overridable per run via
+   `python -m latency.runner.run --request-timeout SECONDS`.
+2. `_send_one()` now catches `httpx.TimeoutException` (connect/read/
+   write/pool) and `httpx.TransportError` (e.g. a connection reset)
+   around the request itself, returning a `_RawFailure(kind="timeout" |
+   "error", detail=...)` instead of letting the exception propagate —
+   mirroring `src/proxy/routes.py::_translate_upstream_connection_failure`'s
+   own most-specific-first exception ordering. A non-200 response or a
+   response missing `X-Correlation-Id` still raises `RuntimeError`
+   unchanged: those indicate a genuine defect for a fixed, known-good
+   workload, not a legitimate scaling outcome — the same "a non-200 here
+   is a real defect, not a scored miss" distinction
+   `adversarial/runner/run.py::run_case()` already draws for that
+   suite.
+3. `run_cell()` now returns `CellRawResults` (successes, `attempted`,
+   `timeout_count`, `error_count`) instead of a bare `list[RequestMeasurement]`.
+   Failed requests are excluded from every latency percentile
+   (`stats.summarize()` only ever sees successful samples) and counted
+   separately. `_run_matrix` (`run.py`) logs a warning per cell with any
+   failures and always proceeds to the next cell regardless — no
+   exception from one cell's outcome can reach the loop that drives the
+   other 39.
+4. `CellReport` gained `attempted`/`timeout_count`/`error_count`
+   alongside `n` (successes); `ttft_with_window_ms`,
+   `ttft_without_window_ms`, and `total_latency_ms` became
+   `StatsSummary | None` (matching `window_tax_ms`/`window_tax_percent`'s
+   existing optionality) so a cell where *every* request fails still
+   produces a valid report — `None` stats, not a crash inside
+   `summarize()` on an empty list. `LatencyReport` gained
+   `request_timeout_s` so the artifact records which ceiling produced
+   it, the same "every number carries the conditions that produced it"
+   discipline BUILD.md's Phase 7 already requires for concurrency level.
+
+**What this fix deliberately does not do.** Change `sanitize()`'s
+call site, add thread/process offloading, or otherwise alter the
+gateway's concurrency model — out of scope per explicit instruction
+("Phase 7 is about measurement, not optimization") and per CLAUDE.md's
+Forbidden Actions ("no architecture change without approval"). The
+event-loop-serialization behaviour itself remains exactly as it was;
+only how the harness measures and reports it changed. Whether to
+address the serialization itself is a separate, future decision.
