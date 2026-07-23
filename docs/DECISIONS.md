@@ -3235,3 +3235,118 @@ route this time. Two named regression tests
 `tests/regression/test_httpx_transport_error_translated_not_generic_500.py`)
 anchor both fixes. Full fast suite, `ruff`, and `mypy --strict src app`
 all pass with no regressions.
+
+---
+
+## 2026-07-23 - Phase 7 Task 4: session lifecycle & resource hardening audit — no production code changes; two verification tests added; a new residual documented; ARCHITECTURE.md corrected to match this file
+
+**What this closes.** A full audit of the session subsystem — creation,
+lookup, TTL expiry, LRU eviction, cleanup, the reverse name map, the
+`KnownSurrogate` registry, locking, memory ownership, concurrent
+access, stale references, and unbounded-growth risk — covering
+`src/session/store.py`, `src/session/session.py`,
+`src/session/rng.py`, and the four candidate-pool modules. Full
+findings in the design-review turn preceding this entry.
+
+**Headline result.** This subsystem already went through almost
+exactly this audit once, on 2026-07-21 (five entries in this file:
+two-level locking, lazy-only eviction and sliding TTL, the LRU capacity
+cap, the name allocator's atomicity, and "Two Session objects for one
+SessionId"). Every one of those claims was checked directly against
+the current code and found accurate — no drift, no regression. This
+audit's job narrowed to: find what that prior pass didn't cover, and
+verify by test what had previously only been argued by reading the
+code.
+
+**Finding 1 — two properties correct by construction, not previously
+proven by a test.** (a) An evicted or expired `Session`'s own state was
+never confirmed to actually be reclaimed — existing tests
+(`test_a_session_created_after_eviction_has_no_memory_of_the_evicted_ones_state`)
+only prove the *store's* map no longer references it, a different
+claim. (b) The TOCTOU-shaped gap in `get_or_create()`'s two-phase lock
+pattern was reasoned safe by reading the single critical section
+(§9 of the audit's research), but no test combined real thread
+concurrency with a `max_sessions` cap low enough to actually be hit
+mid-race.
+
+**Fix.** Two new tests in `tests/unit/test_session_store.py`:
+`test_an_evicted_sessions_state_is_actually_garbage_collected` (a
+`weakref.ref()` on an evicted `Session`, asserted `None` after
+`gc.collect()`) and
+`test_concurrent_get_or_create_never_exceeds_max_sessions_under_real_thread_load`
+(50 threads, 50 distinct new session ids, `max_sessions=10`, asserting
+the store never durably exceeds the cap). No production code changed
+by either — both close a proof gap, not a code defect. `gc.collect()`
+is called explicitly before the weakref assertion per instruction: CPython's
+plain reference counting would already reclaim the object with no
+cyclic-GC pass at all (`Session` holds no reference cycle back to
+itself — its dicts and its lock hold nothing that points back to the
+`Session` instance), but the test itself should not depend on that
+being the interpreter's particular memory model.
+
+**Finding 2 — a new, previously-undocumented theoretical residual.**
+The 2026-07-21 "Bounding session-store growth" decision bounds the
+*number* of distinct sessions the store can hold. It never analyzed
+the *size* of any one session's own internal state over an unboundedly
+long active lifetime — a different growth vector. Because TTL is
+sliding, a session that receives at least one request per
+`SESSION_TTL` window, indefinitely, never expires, and — because every
+access calls `move_to_end()` — stays too recently-used to be
+LRU-evicted either. Nothing bounds that one session's own
+`_known_surrogates`/`_name_forward`/`_name_reverse` dict sizes
+independently of the session-count cap. Tier-2 entity types
+(`PERSON`/`ORG`/`ADDRESS`) are *partially* self-limiting —
+`NameListExhaustedError` caps each at its own candidate pool size,
+roughly 5,000 — but Tier-1 (FF1-based: Aadhaar, PAN, IFSC, UPI, card,
+phone, email, vehicle registration) surrogates have no candidate pool
+and therefore no such ceiling at all.
+
+**Disposition: documented, not fixed.** Theoretical, not demonstrated
+— no test or observed incident shows this; it requires a single
+session kept continuously alive, encountering a very large number of
+distinct real values, well outside this project's stated deployment
+target (`ARCHITECTURE.md`: "one developer's machine... not a fleet").
+A per-session entry cap was considered and rejected: no demonstrated
+trigger exists to size it against, and any number chosen would be
+exactly the unjustified magic constant CLAUDE.md forbids ("no magic
+constants... a comment stating where the value came from" — there is
+no such value to cite here). Disclosed instead, consistent with this
+subsystem's own established pattern for this class of finding (the
+unique-id-flood residual in "Bounding session-store growth," the
+rehydration-oracle side channel in `docs/LIMITATIONS.md`) —
+`ARCHITECTURE.md`'s "Session Management" section now states this
+explicitly.
+
+**Also fixed, same commit: `ARCHITECTURE.md` documentation drift.**
+The "Session Management" Mermaid diagram and prose, and Component 10's
+table, predated the 2026-07-21 decisions above and were never updated
+to match (this file was accurate throughout; only the architecture
+doc had drifted): the diagram named a background "sweeper" that was
+explicitly rejected and never built; both the diagram and the
+component table stated that expiry produces `SessionExpiredError`,
+which does not exist in `src/core/exceptions.py` (removed 2026-07-21,
+"pending a real caller" — `get_or_create()` always returns a usable
+session by construction); and "Eviction is TTL-driven and independent
+of memory pressure" was false — the LRU capacity cap is precisely
+eviction driven *by* count/memory pressure, added specifically to
+close the gap TTL-only eviction left open. All three corrected; the
+diagram now shows both eviction triggers and the "two Session objects"
+invariant explicitly.
+
+**Explicitly not changed, with rationale (kept minimal, per instruction
+to change nothing beyond what's demonstrated):**
+- No per-session entry cap — see Finding 2's disposition above.
+- No migration of `max_sessions` into `Settings` — already deliberately
+  decided against on 2026-07-21, still correct; this audit re-checked
+  the reasoning and found no reason to revisit it.
+- No background sweeper of any kind — architecturally forbidden,
+  repeatedly, on purpose, and re-confirmed still forbidden here.
+- No explicit `.clear()`/dispose call added to evicted `Session`
+  objects — would touch a currently simple, correct, well-tested code
+  path for zero behavioural benefit; refcounting already reclaims
+  immediately, with no cycle to break, which the new weakref test now
+  proves rather than only argues.
+
+**Verified.** `tests/unit/test_session_store.py` grew from 13 to 15
+tests (2 new); full fast suite, `ruff`, and `mypy --strict src` all
+pass with no regressions.

@@ -6,8 +6,10 @@ session_id currently maps to, and the two-lock protocol that must never
 let unrelated sessions block on each other.
 """
 
+import gc
 import threading
 import time
+import weakref
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timedelta
 
@@ -209,3 +211,51 @@ def test_a_session_created_after_eviction_has_no_memory_of_the_evicted_ones_stat
 
     assert recreated is not original
     assert recreated.lookup_surrogate("ABCDE1234F") is None
+
+
+def test_an_evicted_sessions_state_is_actually_garbage_collected(fake_clock: FakeClock) -> None:
+    """Phase 7 session-lifecycle audit: goes one step further than the
+    test above, which only proves the *store's* map no longer
+    references the evicted Session. This proves the Session object
+    itself is actually reclaimed, not merely unreachable through the
+    store while still lingering somewhere else.
+
+    `gc.collect()` is called explicitly before asserting. CPython's
+    plain reference counting would already reclaim this object with no
+    cyclic-GC pass at all — Session holds no reference cycle back to
+    itself (its dicts and its lock hold nothing that points back to the
+    Session instance) — but the test itself should not depend on that
+    being the interpreter's particular memory model.
+    """
+    store = SessionStore(clock=fake_clock, ttl=_TTL, max_sessions=1)
+    original = store.get_or_create(SessionId("a"))
+    ref = weakref.ref(original)
+    del original  # drop the one reference this test itself was holding
+
+    store.get_or_create(SessionId("b"))  # evicts "a" under a 1-session cap
+    gc.collect()
+
+    assert ref() is None
+
+
+def test_concurrent_get_or_create_never_exceeds_max_sessions_under_real_thread_load(
+    fake_clock: FakeClock,
+) -> None:
+    """Phase 7 session-lifecycle audit: combines two properties this
+    file otherwise tests separately — real thread concurrency (e.g.
+    test_concurrent_get_or_create_on_one_new_id_never_creates_duplicates,
+    above) and the capacity cap
+    (test_capacity_cap_evicts_the_least_recently_used_session_when_exceeded,
+    above) — to prove directly, under an actual race with far more
+    threads than the cap, what get_or_create()'s single critical
+    section already guarantees by construction: the store's size can
+    never durably exceed max_sessions."""
+    max_sessions = 10
+    thread_count = 50
+    store = SessionStore(clock=fake_clock, ttl=_TTL, max_sessions=max_sessions)
+    ids = [SessionId(f"s{i}") for i in range(thread_count)]
+
+    with ThreadPoolExecutor(max_workers=thread_count) as pool:
+        list(pool.map(store.get_or_create, ids))
+
+    assert len(store._sessions) <= max_sessions

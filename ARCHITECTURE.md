@@ -311,7 +311,7 @@ Tier 1 is microseconds, and its outputs are the only ones this system describes 
 | **Inputs** | Session ID |
 | **Outputs** | Session handle |
 | **Dependencies** | Injected clock, lock primitive |
-| **Failure modes** | Expiry mid-conversation → surrogates arrive back with no mapping → `SessionExpiredError`. Unbounded growth → memory. Lock contention → latency. Persisting it "for reliability" recreates the vault we deleted. |
+| **Failure modes** | Expiry mid-conversation → surrogates arrive back with no mapping → left unsubstituted, a conservative-matching "miss" (`SessionExpiredError` was considered and removed — see Session Management, below). Unbounded growth in the number of distinct sessions → bounded by a hard LRU capacity cap. Lock contention → latency. Persisting it "for reliability" recreates the vault we deleted. |
 
 ### 11. Sliding Window
 
@@ -684,9 +684,10 @@ stateDiagram-v2
     Created --> Active: first name allocated
     Active --> Active: lookup (hit) — no mutation
     Active --> Active: allocate (miss) — locked,<br/>collision-checked
-    Active --> Expired: TTL elapsed
-    Expired --> Evicted: sweeper
-    Evicted --> [*]: map destroyed
+    Active --> Expired: TTL elapsed,<br/>found on next get_or_create()
+    Active --> Evicted: capacity cap exceeded,<br/>found on next get_or_create()
+    Expired --> [*]: replaced in place,<br/>old object left to GC
+    Evicted --> [*]: LRU entry dropped,<br/>old object left to GC
 
     note right of Active
         The only mutable state
@@ -695,19 +696,28 @@ stateDiagram-v2
     end note
 
     note right of Expired
-        Surrogates arriving after
-        expiry → SessionExpiredError.
-        Never a silent pass-through.
+        Lazy only — nothing sweeps
+        in the background. Checked
+        only when get_or_create()
+        is next called for this id.
+        A surrogate arriving after
+        expiry is simply left
+        unsubstituted (a measured
+        rehydration "miss"), never
+        a silent pass-through of a
+        real value.
     end note
 ```
 
-**Lifecycle.** A session is created on first use, holds the bidirectional name map, and dies at TTL. There is no cross-session state, no warm-up, no persistence, no recovery.
+**Lifecycle.** A session is created on first use, holds the bidirectional name map, and dies at TTL **or** capacity eviction, whichever comes first. There is no cross-session state, no warm-up, no persistence, no recovery.
 
-**TTL.** Bounded lifetime is a security control, not memory hygiene: it caps the window during which a process dump could expose mappings. `SESSION_TTL` is configured and enforced by an injected clock — which is the only reason expiry is testable without sleeping.
+**TTL.** Bounded lifetime is a security control, not memory hygiene: it caps the window during which a process dump could expose mappings. `SESSION_TTL` is configured and enforced by an injected clock — which is the only reason expiry is testable without sleeping. TTL is sliding (activity extends life) and checked lazily — only when `get_or_create()` is next called for that exact session id; there is no background sweeper, timer, or cleanup thread, and none is planned.
 
 **Thread safety and concurrency.** Two in-flight requests on the same session that both encounter a new name will both attempt allocation. Unsynchronised, that produces two mappings; one wins the write, and the other's surrogate rehydrates to the wrong person — or to nothing. Allocation is therefore serialised per session, with lookup on the fast path. Tested with 50 parallel requests on one session asserting no duplicate and no lost mapping.
 
-**Eviction and memory.** A session's footprint is bounded by the distinct entity count in a conversation — kilobytes. The concern is not size but **lifetime**: an un-evicted session is real PII sitting in RAM with no reason to be there. Eviction is TTL-driven and independent of memory pressure.
+**Eviction and memory.** A session's footprint is bounded by the distinct entity count in a conversation. Two independent triggers retire a session, not one: TTL expiry (lazy, checked only on access) and a hard LRU capacity cap (`max_sessions`, default 10,000) that bounds the *number* of distinct sessions the store can ever hold regardless of access pattern — added specifically because lazy-only TTL eviction never fires for an id nobody revisits, which by itself left unbounded growth open under a flood of unique, one-shot session ids (`docs/DECISIONS.md`, 2026-07-21, "Bounding session-store growth"). Neither trigger bounds the size of one *individual* session's own state independently of the other — a single continuously-active session (one that keeps sliding its own TTL forward forever) is not capped on its own distinct-entity count; this is a documented, accepted residual, not a fix pending (`docs/DECISIONS.md`, Phase 7, "A continuously active session's own state is not independently bounded").
+
+**Two `Session` objects can transiently exist for one session id.** Either trigger above can move a session id on to a new `Session` object while a request that already fetched the previous one is still using it — an in-flight request's reference is never invalidated out from under it. Each `Session` is independently thread-safe on its own terms, so this is two independently-consistent states existing momentarily, never one racily-shared inconsistent one (`docs/DECISIONS.md`, 2026-07-21, "Two Session objects for one SessionId").
 
 **Why the map is never durable.** Making it durable "for reliability across restarts" would rebuild the vault the architecture deliberately deleted, and convert a transient risk into a permanent one. This is not an optimisation opportunity. It is the threat model.
 
