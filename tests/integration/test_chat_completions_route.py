@@ -17,12 +17,14 @@ import pytest
 from fastapi.testclient import TestClient
 
 from app.main import app
+from src.core.clock import get_clock
 from src.core.fail_mode import FailMode, get_fail_mode
-from src.core.types import Offset
+from src.core.types import Offset, SessionId
 from src.detect.tier2.gliner_model import get_tier2_model
 from src.detect.tier2.model import ModelEntityMatch
 from src.mock_upstream.main import app as mock_app
 from src.proxy.upstream_client import get_upstream_client
+from src.session.store import get_session_store
 
 
 def _override_with_mock_upstream() -> None:
@@ -196,6 +198,112 @@ def test_streaming_connection_failure_also_returns_502() -> None:
     )
 
     assert response.status_code == 502
+
+
+@pytest.mark.parametrize(
+    "raise_exc",
+    [
+        httpx.ReadError("connection reset by peer"),
+        httpx.RemoteProtocolError("server sent invalid HTTP response"),
+    ],
+)
+def test_non_streaming_transport_error_returns_502_not_a_generic_500(
+    raise_exc: httpx.TransportError,
+) -> None:
+    """Phase 7 hardening: previously only httpx.TimeoutException and
+    httpx.ConnectError were caught at connection-open time. A
+    ReadError/RemoteProtocolError here fell through to a generic,
+    unstructured 500 — inconsistent with the exact same exception
+    classes already being handled gracefully once inside the SSE
+    generator's own loop. Widening to httpx.TransportError closes that
+    gap; see src/proxy/routes.py::_translate_upstream_connection_failure."""
+
+    def _raise(request: httpx.Request) -> httpx.Response:
+        raise raise_exc
+
+    _override_with_transport(httpx.MockTransport(_raise))
+    client = TestClient(app, headers={"X-Session-Id": "test-session-1"})
+
+    response = client.post(
+        "/v1/chat/completions",
+        json={"model": "gpt-4", "messages": [{"role": "user", "content": "hi"}], "stream": False},
+    )
+
+    assert response.status_code == 502
+    assert response.json() == {"error": "could not connect to upstream"}
+
+
+@pytest.mark.parametrize(
+    "raise_exc",
+    [
+        httpx.ReadError("connection reset by peer"),
+        httpx.RemoteProtocolError("server sent invalid HTTP response"),
+    ],
+)
+def test_streaming_transport_error_at_connect_returns_502_not_a_generic_500(
+    raise_exc: httpx.TransportError,
+) -> None:
+    """The streaming counterpart of the test above — the connect
+    attempt happens before StreamingResponse is returned, so this can
+    still become a real error status, exactly like ConnectError already
+    does (test_streaming_connection_failure_also_returns_502)."""
+
+    def _raise(request: httpx.Request) -> httpx.Response:
+        raise raise_exc
+
+    _override_with_transport(httpx.MockTransport(_raise))
+    client = TestClient(app, headers={"X-Session-Id": "test-session-1"})
+
+    response = client.post(
+        "/v1/chat/completions",
+        json={"model": "gpt-4", "messages": [{"role": "user", "content": "hi"}], "stream": True},
+    )
+
+    assert response.status_code == 502
+    assert response.json() == {"error": "could not connect to upstream"}
+
+
+def test_rehydration_invariant_violation_returns_500_with_structured_error_body() -> None:
+    """Phase 7 hardening (GatewayError catch-all): deliberately
+    construct the same invariant-violation state
+    tests/unit/test_rehydrate.py's own unit test constructs — a
+    session's known-surrogate registry says PERSON for a value with no
+    matching reverse-map entry — but through the real HTTP route,
+    non-streaming. Previously this reached Starlette's bare,
+    unstructured default 500; now it gets the same `{"error": ...}`
+    shape every other GatewayError subclass already had."""
+
+    def _echo_unmapped_surrogate(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            200,
+            json={
+                "id": "x",
+                "choices": [
+                    {
+                        "index": 0,
+                        "finish_reason": "stop",
+                        "message": {
+                            "role": "assistant",
+                            "content": "Noted, Someone Nobody Allocated.",
+                        },
+                    }
+                ],
+            },
+        )
+
+    _override_with_transport(httpx.MockTransport(_echo_unmapped_surrogate))
+    session_id = "rehydration-invariant-violation-session"
+    session = get_session_store().get_or_create(SessionId(session_id))
+    session.record_surrogate("Someone Nobody Allocated", "PERSON", get_clock().now())
+    client = TestClient(app, headers={"X-Session-Id": session_id})
+
+    response = client.post(
+        "/v1/chat/completions",
+        json={"model": "gpt-4", "messages": [{"role": "user", "content": "hi"}], "stream": False},
+    )
+
+    assert response.status_code == 500
+    assert "error" in response.json()
 
 
 def test_malformed_streaming_response_terminates_stream_honestly_not_as_an_error_status() -> None:

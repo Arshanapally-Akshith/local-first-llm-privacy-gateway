@@ -779,7 +779,7 @@ flowchart TD
     A -->|"Surrogate domain error"| R3["500 + SurrogateDomainError<br/><b>never pass through</b><br/>half-sanitised = leak"]
     A -->|"Upstream 4xx/5xx"| R4["Propagate verbatim<br/>preserve provider semantics"]
     A -->|"Upstream mid-stream drop"| R5["Flush window,<br/>rehydrate what we have,<br/>terminate stream honestly"]
-    A -->|"Session expired mid-conversation"| R6["SessionExpiredError<br/><b>never silent pass-through</b>"]
+    A -->|"Other internal invariant violation<br/>(DetectionError, RehydrationError,<br/>NameListExhaustedError)"| R6["500 + GatewayError catch-all<br/><b>never silent pass-through</b>"]
 
     R2 -->|open| O["Forward unsanitised<br/><b>PII leaks</b>"]
     R2 -->|closed| C["503<br/><b>caller is down</b>"]
@@ -805,6 +805,12 @@ The architecture's position: **`closed` is the defensible default for a privacy 
 **Streaming failures.** Mid-stream upstream drops flush the window, rehydrate what exists, and terminate honestly. **Failure to flush on `[DONE]` truncates the last sentence of every response** — a bug that looks like a model artifact and is therefore easy to live with for weeks.
 
 **Recovery strategy.** There isn't one, deliberately. No retry queues, no partial-state recovery, no durable resumption — every mechanism would require persisting something we refuse to persist. The system fails cleanly, loudly, and statelessly. Recovery is the caller retrying.
+
+**The exception hierarchy, and its HTTP translation, are centralized (Phase 7 audit).** Every `GatewayError` subclass — `UpstreamError`, `SurrogateDomainError`, `FailClosedError`, and now also `DetectionError`, `RehydrationError`, `NameListExhaustedError` — resolves to exactly one `app/main.py` handler, all sharing one response-construction helper (`_gateway_error_response`), so the `{"error": "<message>"}` shape is defined once, not per handler. The three types with their own dedicated status code (502/504 for `UpstreamError`, 500 for `SurrogateDomainError`, 503 for `FailClosedError`) keep their specific handlers; a `@app.exception_handler(GatewayError)` catch-all covers every other subclass, relying on Starlette's own MRO-based handler resolution (the more specific handler always wins). Before this, three of the six hierarchy members had no registered handler at all and fell through to Starlette's bare, unstructured default 500. A full audit and its findings are recorded in `docs/DECISIONS.md`.
+
+Note `DetectionError` is, in practice, never observed at this HTTP boundary today: it is raised inside `src/detect/tier2/detector.py` but always caught first by `src/detect/cascade.py`'s own broad exception handling, which folds it into `FAIL_MODE`'s open/closed dispatch before it can propagate further. The catch-all still covers it — for any future code path that raises it outside that one guarded call site — but the type is currently reachable only as the trigger behind `FailClosedError` (`closed`) or a logged warning (`open`), not directly.
+
+**The upstream connection-failure translation is centralized too.** Both the non-streaming and streaming-connect code paths call the same `_translate_upstream_connection_failure()` helper (`src/proxy/routes.py`) rather than repeating the `httpx`-to-`UpstreamError` translation. It catches `httpx.TransportError` (not just `ConnectError`), so a `ReadError`, `WriteError`, `CloseError`, `ProtocolError`, `ProxyError`, or `UnsupportedProtocol` at connection-open time now gets the same 502 an outright `ConnectError` always did, instead of falling through to a generic 500 — closing an inconsistency where the exact same exception categories were already handled gracefully once inside the SSE generator's own mid-stream loop, but not at connection-open. `httpx.TimeoutException` (itself a `TransportError` subclass) is still checked first and still maps to 504.
 
 ---
 

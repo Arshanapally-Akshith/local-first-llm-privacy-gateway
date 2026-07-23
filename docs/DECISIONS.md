@@ -3088,3 +3088,150 @@ into test outcomes for any defaulted field the test doesn't explicitly
 override — a real test-isolation hazard, not hypothetical, fixed before
 it could cause a flaky suite. Full fast suite, `ruff`, and
 `mypy --strict src` all pass with no regressions.
+
+---
+
+## 2026-07-23 - Phase 7 Task 3: failure-path audit — one centralized GatewayError catch-all, one shared httpx-translation helper, and two documentation corrections; Fail Open/Fail Closed centralization confirmed intact
+
+**What prompted this.** A full audit of every exception type and every
+place an exception crosses a subsystem boundary in the gateway (proxy →
+pipeline → detect/surrogate/session → core), covering: the complete
+`GatewayError` hierarchy and every raw stdlib/library exception raised
+anywhere in `src/`/`app/`; every `try`/`except` block; `app/main.py`'s
+registered handlers; `fail_mode.py`'s centralization; the SSE
+generator's own exception handling once headers are committed; and
+every place two subsystems might translate the same underlying failure
+twice. Full findings in the design-review turn preceding this entry.
+
+**Finding 1 — three of six `GatewayError` subclasses had no registered
+handler.** `DetectionError`, `RehydrationError`, and
+`NameListExhaustedError` are real, raiseable types with no
+`@app.exception_handler` in `app/main.py`, unlike `UpstreamError`,
+`SurrogateDomainError`, and `FailClosedError`. They fell through to
+Starlette's own bare default 500 (plain text, no `{"error": ...}`
+body, no distinguishing status code) — safe only because `debug=True`
+is never set anywhere in this codebase, which is a fragile invariant
+to rely on implicitly rather than a designed one.
+
+**Fix.** One `@app.exception_handler(GatewayError)` catch-all in
+`app/main.py`. Verified safe by direct inspection of
+`app.exception_handlers` and Starlette's own handler-resolution
+mechanism (`_lookup_exception_handler`, which walks
+`type(exc).__mro__` and returns the first *registered* class found):
+the three existing specific handlers match on the exact type before
+the walk ever reaches `GatewayError`, so they are completely
+unaffected. `str(exc)` is safe to return for every subclass, confirmed
+by the audit: none of the six ever interpolates a raw lower-layer
+exception's message or a real detected value — every message is built
+from typed fields already in hand (entity type, offsets, counts).
+
+**Alternatives considered.**
+- **Three individually registered handlers** (one each for
+  `DetectionError`/`RehydrationError`/`NameListExhaustedError`):
+  rejected — all three would be byte-for-byte identical to
+  `SurrogateDomainError`'s existing handler (500 + `{"error": ...}`),
+  and registering three more copies is exactly the "duplicated
+  exception handling" this audit exists to find and remove, not add.
+- **Do nothing, rely on `debug` staying `False`**: rejected — this is
+  the status quo, and it means three real failure modes are
+  indistinguishable from an unrelated crash to any operator or
+  monitoring system watching status codes/response shapes.
+
+**Also fixed, same commit: response construction centralized.**
+`_gateway_error_response(status_code, exc)` is now the one place any
+`GatewayError` handler builds its `JSONResponse` — previously each of
+the three existing handlers repeated `JSONResponse(status_code=...,
+content={"error": str(exc)})` verbatim; a fourth copy in the new
+catch-all would have made it worse, not better.
+
+**Finding 2 — duplicated `httpx`-to-`UpstreamError` translation, and a
+narrower exception surface than the SSE generator's own mid-stream
+handling.** `_forward_non_streaming` and `_start_streaming` each
+repeated an identical two-clause `except httpx.TimeoutException` /
+`except httpx.ConnectError` block. Separately: once inside the SSE
+generator's own loop, the *broader* `httpx.TransportError` is already
+caught and handled gracefully (`routes.py`'s flush-and-terminate
+path) — but at connection-open time, in both paths, only
+`TimeoutException`/`ConnectError` were caught, so a `ReadError`,
+`WriteError`, `CloseError`, `ProtocolError`, `ProxyError`, or
+`UnsupportedProtocol` at connection-open fell through to a generic,
+unstructured 500 — the same failure class handled differently
+depending purely on which phase of the request it occurred in.
+
+**Fix.** One shared `_translate_upstream_connection_failure(exc:
+httpx.TransportError) -> UpstreamError` helper, called from both sites
+with a single `except httpx.TransportError` clause (replacing the two
+narrower clauses). `httpx.TimeoutException` — itself a
+`TransportError` subclass — is checked first inside the helper and
+still maps to 504; every other category maps to 502, on the reasoning
+that none of them produced a complete, valid exchange with the
+upstream, which is the only distinction this proxy's own caller can
+act on. Per-category justification (verified against the installed
+`httpx==0.27.2`'s actual exception tree, not assumed from memory) lives
+in the helper's own docstring in `src/proxy/routes.py`. Deliberately
+not extended to `httpx.DecodingError`/`httpx.TooManyRedirects` — both
+are `RequestError` siblings of `TransportError`, not subclasses, and
+both presuppose a response was actually received (a different failure
+class); neither is reachable in this codebase today (no
+`Content-Encoding` handling, redirects not followed).
+
+**Fail Open/Fail Closed centralization — audited, confirmed intact, no
+change.** `resolve_failure()` (`src/core/fail_mode.py`) remains the
+only place `fail_mode == "closed"`/`"open"` is ever compared, with
+exactly one call site (`cascade.py`, wrapping the Tier-2 stage).
+`sanitize.py` still does not duplicate this — zero `except` clauses in
+that file, confirmed by direct grep — matching the 2026-07-21 decision
+to keep this scoped to Tier-2 specifically. Neither change in this
+entry touches `fail_mode.py`, `cascade.py`, or the dispatch mechanism
+itself.
+
+**Explicitly not changed, with rationale (kept minimal, per instruction
+to focus only on demonstrated issues):**
+- No new `ConfigError` type, no reintroduction of `SessionExpiredError`
+  — see the corrected hierarchy list in `CLAUDE.md`.
+- No handling added for the internal `ValueError`/`RuntimeError`
+  precondition guards (`sliding_window.py`, `chunking.py`, `store.py`,
+  etc.) — correctly loud as unhandled 500s today; wrapping them would
+  make true programmer errors *quieter*, contrary to CLAUDE.md's "fail
+  loudly during development."
+- No change to the mock upstream's differing error-response shape or
+  its raw-body logging — both reviewed and found correctly justified:
+  the mock's whole purpose is standing in for an arbitrary untrusted
+  third party, which would not share this project's own conventions
+  either.
+- No change to the SSE generator's two separate `except UpstreamError`
+  catches (main loop vs. post-drop flush) — genuinely different
+  phases, not duplicated translation.
+- `DetectionError` is not reachable through the new catch-all in
+  practice today — `cascade.py`'s own broad exception handling catches
+  it first and folds it into `FAIL_MODE`'s dispatch before it can
+  propagate further. The catch-all still exists for it (and any future
+  code path), but this is worth stating plainly rather than implying a
+  test exercises it end-to-end through a real HTTP request, which none
+  practically can.
+
+**Documentation corrections (accuracy, not behavior change).**
+`ARCHITECTURE.md`'s Error Handling flowchart still named
+`SessionExpiredError` as a live branch — corrected to the actual
+`GatewayError` catch-all path. `CLAUDE.md`'s exception-hierarchy list
+named `SessionExpiredError`/`ConfigError` (neither exists) and omitted
+`NameListExhaustedError`/`FailClosedError` (both exist) — corrected,
+with the reasoning for each omission stated inline so the correction
+doesn't just move the drift risk to `CLAUDE.md`'s next reader.
+
+**Verified.** New `tests/unit/test_main.py` (direct handler-level
+tests — every handler ignores its `Request` argument, so each is
+called as a plain coroutine) and `tests/unit/
+test_upstream_connection_translation.py` (every `httpx.TransportError`
+category, parametrized, plus a leak-check proving the translated
+message never includes the raw `httpx` exception text). Two new
+integration tests in `test_chat_completions_route.py` prove the
+`httpx.TransportError` widening end-to-end for both the non-streaming
+and streaming-connect paths, plus one constructing the exact
+`RehydrationError` invariant-violation scenario
+`tests/unit/test_rehydrate.py` already uses, through the real HTTP
+route this time. Two named regression tests
+(`tests/regression/test_gatewayerror_subclasses_get_a_structured_response.py`,
+`tests/regression/test_httpx_transport_error_translated_not_generic_500.py`)
+anchor both fixes. Full fast suite, `ruff`, and `mypy --strict src app`
+all pass with no regressions.

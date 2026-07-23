@@ -119,6 +119,65 @@ def _forwardable_headers(
     return {k: v for k, v in headers.items() if k.lower() not in drop}
 
 
+def _translate_upstream_connection_failure(exc: httpx.TransportError) -> UpstreamError:
+    """The one place a raw httpx transport-layer failure becomes the
+    `UpstreamError` both `_forward_non_streaming` and `_start_streaming`
+    raise for a failed connection attempt — previously two byte-for-byte
+    identical `except` blocks (Phase 7 hardening finding; see
+    `docs/DECISIONS.md`).
+
+    `httpx.TransportError` is the base class covering every category
+    below; `httpx.TimeoutException` is itself one of its subclasses, so
+    checking it first (504) and falling back to 502 for everything else
+    is a strict widening of the previous `TimeoutException`/`ConnectError`
+    pair, not a behavioural change for either of those two. Every newly
+    covered category maps to 502 ("could not connect to upstream") for
+    the same reason: from the caller's perspective, none of them
+    produced a valid, complete exchange with the upstream — only *where*
+    in the exchange it broke differs, which isn't a distinction this
+    proxy's caller can act on differently. Per category:
+
+    - `ConnectError` (already handled before this change) / `ReadError` /
+      `WriteError` / `CloseError` (`httpx.NetworkError` family): the TCP
+      connection failed to establish, or failed partway through the
+      request/response exchange or its teardown — the same practical
+      outcome as a failed connect, just at a different phase.
+    - `RemoteProtocolError`: the upstream sent a response that violates
+      HTTP framing — squarely "Bad Gateway" territory, the upstream's
+      own fault.
+    - `LocalProtocolError`: this side violated HTTP framing while
+      constructing the request. Rare (request bodies here are ordinary
+      JSON with standard headers) and root-caused elsewhere if it ever
+      fires, but the practical outcome for this proxy's caller is
+      identical — no valid exchange occurred — so it shares the same
+      status rather than crashing to a generic, undifferentiated 500.
+    - `ProxyError`: a failure in an intermediate proxy `httpx` was
+      configured to use while trying to reach the upstream. The
+      upstream itself was never reached, matching `ConnectError`'s own
+      semantics.
+    - `UnsupportedProtocol`: the configured URL's scheme isn't one the
+      transport supports. `Settings`'s own `upstream_base_url` validator
+      (Phase 7 hardening) already restricts this to `http`/`https` at
+      startup, so this should not occur in practice — covered here only
+      so a transport-level edge case doesn't crash to a generic 500
+      instead of the same 502 every other unreachable-upstream case gets.
+
+    Deliberately not covered by this function (unrelated failure
+    shapes, not narrowed for lack of trying): `httpx.DecodingError` and
+    `httpx.TooManyRedirects` are `RequestError` siblings of
+    `TransportError`, not subclasses of it, and both presuppose a
+    response was actually received — a different failure class from
+    "could not exchange a request with the upstream at all." Neither is
+    reachable in this codebase today (no `Content-Encoding` handling
+    that could fail to decode; `httpx.AsyncClient` does not follow
+    redirects here), so extending coverage to them is not a demonstrated
+    need.
+    """
+    if isinstance(exc, httpx.TimeoutException):
+        return UpstreamError("upstream request timed out", status_code=504)
+    return UpstreamError("could not connect to upstream", status_code=502)
+
+
 def _has_content_slot(delta: ContentDelta) -> bool:
     """Whether `delta`'s envelope has a `choices[0].delta.content` key
     at all — the role-establishing and plain content chunks do; the
@@ -197,10 +256,8 @@ async def _forward_non_streaming(
 ) -> Response:
     try:
         upstream_response = await client.post(_CHAT_COMPLETIONS_PATH, json=body)
-    except httpx.TimeoutException as exc:
-        raise UpstreamError("upstream request timed out", status_code=504) from exc
-    except httpx.ConnectError as exc:
-        raise UpstreamError("could not connect to upstream", status_code=502) from exc
+    except httpx.TransportError as exc:
+        raise _translate_upstream_connection_failure(exc) from exc
     return Response(
         content=_rehydrated_content(upstream_response, session, key_provider, correlation_id),
         status_code=upstream_response.status_code,
@@ -259,10 +316,8 @@ async def _start_streaming(
     stream_ctx = client.stream("POST", _CHAT_COMPLETIONS_PATH, json=body)
     try:
         upstream_response = await stream_ctx.__aenter__()
-    except httpx.TimeoutException as exc:
-        raise UpstreamError("upstream request timed out", status_code=504) from exc
-    except httpx.ConnectError as exc:
-        raise UpstreamError("could not connect to upstream", status_code=502) from exc
+    except httpx.TransportError as exc:
+        raise _translate_upstream_connection_failure(exc) from exc
     return StreamingResponse(
         _generate_sse(stream_ctx, upstream_response, session, key_provider, correlation_id),
         media_type="text/event-stream",
