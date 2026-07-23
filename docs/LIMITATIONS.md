@@ -113,40 +113,56 @@ same as either technique alone — see `docs/DECISIONS.md`, 2026-07-22,
 
 ---
 
-## Tier-2 can misclassify a message's literal `role` field as `PERSON`, corrupting the OpenAI role enum
+## Tier-2 can misclassify a message's literal `role` field as `PERSON`, corrupting the OpenAI role enum — resolved
 
 **Phase 4 (gap present since Tier-2 was wired in). Discovered in Phase
-6, documented here, not fixed.**
+6, documented, not fixed. Resolved in Phase 7.**
 
 `get_tier2_model().find_entities("user")` returns a `PERSON` match
 spanning the entire string — a context-free, 4-character token is
 exactly the input zero-shot NER is least reliable on.
 `src/pipeline/field_walker.py::_walk()` treats every string-valued
 field the same way, including a chat message's `"role"` field (nothing
-special-cases it), so `sanitize()` can replace a message's literal
+special-cases it), so `sanitize()` could replace a message's literal
 `"role": "user"` with a fabricated person-name surrogate — observed
 directly during Phase 6's own live-gateway test runs, e.g. a captured
 upstream body containing `{"role": "Krishna Chowdhury", "content":
-"..."}`. This corrupts a value the OpenAI wire format requires to be one
-of a fixed enum (`system`/`user`/`assistant`/`tool`), and is unrelated
-to any deliberate bypass attempt — it can occur on an entirely ordinary
-request whenever Tier-2 happens to misfire on the bare role string.
+"..."}`. This corrupted a value the OpenAI wire format requires to be
+one of a fixed enum (`system`/`user`/`assistant`/`tool`), and was
+unrelated to any deliberate bypass attempt — it could occur on an
+entirely ordinary request whenever Tier-2 happened to misfire on the
+bare role string.
 
-**Why this is disclosed here rather than fixed.** This is a real
-defect in the already-shipped, non-adversarial request path, discovered
-incidentally by Phase 6's methodology (the first test work to scrutinize
-an entire captured request body against real Tier-2 inference, rather
-than only a message's `content`). Fixing it is out of Phase 6's own
-scope (the adversarial suite, not a Phase 4 pipeline change), and was
-explicitly deferred by the product owner on being reported — see
-`docs/DECISIONS.md`, 2026-07-22, for the full root-cause and the
-decision to document rather than fix immediately.
+**Why this was disclosed rather than fixed immediately.** This is a
+real defect in the already-shipped, non-adversarial request path,
+discovered incidentally by Phase 6's methodology (the first test work
+to scrutinize an entire captured request body against real Tier-2
+inference, rather than only a message's `content`). Fixing it was out
+of Phase 6's own scope (the adversarial suite, not a Phase 4 pipeline
+change), and was explicitly deferred by the product owner on being
+reported — see `docs/DECISIONS.md`, 2026-07-22, for the full
+root-cause, and 2026-07-23 for the fix.
 
-**Does not invalidate any Phase 6 measurement.** Every verifier in
+**Did not invalidate any Phase 6 measurement.** Every verifier in
 `adversarial/cases/verify.py` checks specific, known field paths
 directly, never a fuzzy whole-body search that this corruption could
 interfere with — confirmed by direct inspection that no case's `caught`
 verdict was affected by it.
+
+**Resolution (Phase 7).** `src/pipeline/protocol_fields.py` declares
+the OpenAI wire protocol's closed-vocabulary field positions —
+`messages[].role` is the only entry so far — and `sanitize()` skips
+detection entirely on a region whose path and value both match a
+declared entry, before that region is ever handed to `detect()`. The
+exemption is a value-membership check, not a field-name exclusion: a
+`role` field holding anything other than one of its five legal values
+(`system`/`user`/`assistant`/`tool`/`function`) still gets full
+detection, exactly like any other field — so this cannot become a new
+channel for smuggling real PII past the gateway through the `role`
+position. See `docs/DECISIONS.md`, 2026-07-23, for the alternatives
+considered (a key-name exclusion was rejected as unsound) and
+`tests/regression/test_role_field_pii_misclassification.py` for the
+end-to-end reproduction and fix proof.
 
 ---
 

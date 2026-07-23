@@ -62,6 +62,27 @@ class _FakeTier2Model:
         return [m for m in self._matches if m.end <= len(text)]
 
 
+class _RoleMisfiringTier2Model:
+    """Simulates the disclosed Phase 6 defect directly
+    (`docs/LIMITATIONS.md`, "Tier-2 can misclassify a message's literal
+    `role` field as `PERSON`"): `find_entities()` returns a `PERSON`
+    match spanning the entire string whenever the text it is given is
+    exactly one of `misfire_on` — a stand-in for real GLiNER's own
+    misfire on short, context-free tokens like "user", without loading
+    real weights. Unlike `_FakeTier2Model`, matching is by exact text
+    rather than fixed offsets, so this only ever fires on the literal
+    token under test, never collaterally on an unrelated same-length
+    field elsewhere in the body."""
+
+    def __init__(self, misfire_on: frozenset[str]) -> None:
+        self._misfire_on = misfire_on
+
+    def find_entities(self, text: str) -> list[ModelEntityMatch]:
+        if text in self._misfire_on:
+            return [_match(0, len(text), "PERSON")]
+        return []
+
+
 class _RaisingTier2Model:
     """A `Tier2Model` whose `find_entities()` always raises — the
     Phase 4 Task 4 "model unavailable" case, exercised end-to-end
@@ -503,3 +524,93 @@ def test_tier2_failure_with_fail_mode_closed_raises_fail_closed_error_and_body_u
         _sanitize(body, _fresh_session(fake_clock), fake_clock, model, "closed")
 
     assert body == original
+
+
+# --- Phase 7: protocol-aware field walking (messages[].role) ---------------
+
+
+def test_role_field_survives_a_tier2_misfire_that_would_otherwise_corrupt_it(
+    fake_clock: FakeClock,
+) -> None:
+    """Regression for the disclosed defect in `docs/LIMITATIONS.md`:
+    Tier-2 misclassifying the literal role token "user" as `PERSON`
+    must not corrupt the OpenAI role enum, even though the exact same
+    model would substitute the identical string if it appeared as
+    ordinary content (see the next test)."""
+    model = _RoleMisfiringTier2Model(frozenset({"user", "assistant"}))
+    body: dict[str, JSONValue] = {
+        "model": "gpt-4",
+        "messages": [{"role": "user", "content": "hello there"}],
+    }
+
+    result = _sanitize(body, _fresh_session(fake_clock), fake_clock, model)
+
+    messages = result["messages"]
+    assert isinstance(messages, list)
+    message = messages[0]
+    assert isinstance(message, dict)
+    assert message["role"] == "user"
+
+
+def test_role_exemption_does_not_suppress_detection_in_the_same_messages_content(
+    fake_clock: FakeClock,
+) -> None:
+    """The exemption is scoped to the `role` field itself, not the
+    whole message: real PII in `content` alongside an exempted role
+    must still be caught."""
+    model = _RoleMisfiringTier2Model(frozenset({"user"}))
+    body: dict[str, JSONValue] = {
+        "model": "gpt-4",
+        "messages": [{"role": "user", "content": f"Aadhaar {_VALID_AADHAAR}"}],
+    }
+
+    result = _sanitize(body, _fresh_session(fake_clock), fake_clock, model)
+
+    messages = result["messages"]
+    assert isinstance(messages, list)
+    message = messages[0]
+    assert isinstance(message, dict)
+    assert message["role"] == "user"
+    assert _VALID_AADHAAR not in _first_message_content(result)
+
+
+def test_a_non_conforming_role_value_is_still_fully_scanned_for_pii(
+    fake_clock: FakeClock,
+) -> None:
+    """The fail-safe half of the invariant, proven through `sanitize()`
+    itself: a `role` field holding real PII (a malformed client, or an
+    attempt to smuggle content past detection) is not exempt just
+    because of its position — only a legal enum member is exempt
+    (`src/pipeline/protocol_fields.py`)."""
+    body: dict[str, JSONValue] = {
+        "model": "gpt-4",
+        "messages": [{"role": _VALID_AADHAAR, "content": "hi"}],
+    }
+
+    result = _sanitize(body, _fresh_session(fake_clock), fake_clock)
+
+    messages = result["messages"]
+    assert isinstance(messages, list)
+    message = messages[0]
+    assert isinstance(message, dict)
+    role_value = message["role"]
+    assert isinstance(role_value, str)
+    assert _VALID_AADHAAR not in role_value
+
+
+def test_a_legal_role_value_appearing_as_ordinary_content_is_still_scanned(
+    fake_clock: FakeClock,
+) -> None:
+    """The same literal token that is exempt at the role position is
+    not exempt anywhere else — proves the check is genuinely
+    position-aware, not a blanket "never scan text equal to a role
+    word" rule."""
+    model = _RoleMisfiringTier2Model(frozenset({"user"}))
+    body: dict[str, JSONValue] = {
+        "model": "gpt-4",
+        "messages": [{"role": "system", "content": "user"}],
+    }
+
+    result = _sanitize(body, _fresh_session(fake_clock), fake_clock, model)
+
+    assert _first_message_content(result) != "user"

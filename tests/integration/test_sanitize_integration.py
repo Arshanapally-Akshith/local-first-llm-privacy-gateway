@@ -186,3 +186,35 @@ def test_a_surrogate_replayed_in_a_later_request_on_the_same_session_is_not_re_e
     # a second time into something else.
     assert second_upstream_saw["messages"][1]["content"] == f"Noted: {surrogate}"
     assert _VALID_AADHAAR not in json.dumps(second_upstream_saw)
+
+
+def test_every_message_role_reaches_upstream_unmodified_alongside_real_pii_substitution() -> None:
+    """Phase 7 gate: `messages[].role` survives a full live-ASGI round
+    trip byte-identical, for every role the wire protocol allows, in
+    the same request that has real PII substituted elsewhere — proving
+    the protocol-enum-field exemption (`src/pipeline/protocol_fields.py`)
+    doesn't regress ordinary sanitization alongside it. See
+    `tests/regression/test_role_field_pii_misclassification.py` for the
+    Tier-2-misfire reproduction this closes."""
+    capturing = _override_with_capturing_mock_upstream()
+    client = TestClient(app, headers={"X-Session-Id": "role-preservation-session"})
+
+    response = client.post(
+        "/v1/chat/completions",
+        json={
+            "model": "gpt-4",
+            "messages": [
+                {"role": "system", "content": "be helpful"},
+                {"role": "user", "content": f"My Aadhaar is {_VALID_AADHAAR}"},
+                {"role": "assistant", "content": "noted"},
+                {"role": "tool", "content": "42 degrees celsius"},
+            ],
+            "stream": False,
+        },
+    )
+
+    assert response.status_code == 200
+    upstream_saw = json.loads(capturing.captured_bodies[0])
+    roles = [message["role"] for message in upstream_saw["messages"]]
+    assert roles == ["system", "user", "assistant", "tool"]
+    assert _VALID_AADHAAR not in upstream_saw["messages"][1]["content"]

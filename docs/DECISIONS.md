@@ -2905,3 +2905,88 @@ Tier-2/PERSON bypass class was ever affected.
 three consecutive times after the fix; `latest.json` and `latest.md`
 were byte-identical across all three (`diff` exit 0). Fast and
 `real_model` suites re-run in full afterward with no regressions.
+
+---
+
+## 2026-07-23 - Phase 7: protocol-aware field walking — closes the deferred `messages[].role` misclassification, via a value-checked protocol-enum registry, not a key-name exclusion
+
+**What this closes.** The defect deferred on 2026-07-22 (this file, and
+`docs/LIMITATIONS.md`): Tier-2 misclassifying a message's literal
+`role` value (e.g. `"user"`) as `PERSON`, which `sanitize()` then
+substituted with a fabricated name surrogate, corrupting a value the
+OpenAI wire format requires to be one of a fixed enum.
+
+**The issue, precisely.** `field_walker.walk()` finds every
+text-bearing field in a request body generically, with no notion of
+which fields are natural-language content versus wire-protocol
+metadata. `sanitize()` fed every region unconditionally to `detect()`,
+so a Tier-2 false positive on a short, context-free token like `"user"`
+had no way to be distinguished from a genuine detection in ordinary
+content.
+
+**Alternatives considered.**
+- **Key-name exclusion** (`if key == "role": skip`), inline in
+  `field_walker.py` or `sanitize.py`: rejected. This is unsound, not
+  merely inelegant — it would skip detection under that key
+  unconditionally, regardless of content, which opens exactly the leak
+  channel this proxy exists to close: a malformed client, or an
+  attacker deliberately placing real PII in a field expected to be
+  skipped, would have it forwarded to the upstream provider completely
+  unscanned. It also doesn't generalize safely: `"type"` appears at
+  several positions in this schema with different meanings (`tools[].type`,
+  and — recursively, at arbitrary depth — a JSON-Schema `"type"`
+  keyword inside `tools[].function.parameters`, which can collide with
+  a user-defined property literally named `type`), and a name-only rule
+  can't distinguish these without scattering more special-casing through
+  the traversal or detection code (CLAUDE.md: "No duplicated logic").
+- **A typed request model** (Pydantic/dataclass) with `role: Literal[...]`,
+  replacing the raw-dict body: rejected as out of scope for this defect.
+  The gateway's request path is deliberately schema-agnostic
+  (`field_walker.py`'s own docstring: "the field you forget is the
+  leak" — a field this project's authors didn't anticipate is still
+  found, not silently skipped); introducing a typed schema is a larger
+  architectural change than a value-checked exemption requires, and
+  wasn't asked for.
+- **A value-checked protocol-enum registry** (chosen): a new module,
+  `src/pipeline/protocol_fields.py`, declares — as one small, citation-bearing
+  data table — the wire-protocol positions whose values are drawn from
+  a finite, spec-defined vocabulary, together with that vocabulary.
+  `is_protocol_enum_value(path, text)` is a two-part test: the region's
+  path must match a declared position, *and* its value must actually be
+  one of that field's legal members. A path match with a non-member
+  value returns `False` and falls through to ordinary detection — the
+  value check, not the path check alone, is what keeps this from
+  becoming a new leak channel. `sanitize()` is the only caller, in the
+  existing `walk()` loop, before `detect()` is invoked; `field_walker.py`
+  itself is unchanged, so `walk()`/`rebuild()` still reach and
+  round-trip every field, `role` included.
+
+**Scope of the initial table: `messages[].role` only.** The design
+supports adding further protocol-enum positions later (e.g.
+`tool_calls[].type`, `tools[].type` — both are also closed
+single-value enums at fixed, non-recursive paths, the same failure
+class as `role`), but none were added in this phase. Per explicit
+product-owner instruction: extending the table requires a demonstrated
+failing test or a real observed bug, the same bar `role` itself met —
+not speculative coverage of every closed-enum-shaped field this schema
+could ever contain.
+
+**Explicit non-goal.** The recursive JSON-Schema `"type"` keyword
+inside `tools[].function.parameters` is not handled and is not
+planned to be via this mechanism: its path is not fixed-depth or
+unambiguous (arbitrary nesting, and collides with a user-defined
+property that could itself be named `type`). It remains ordinary
+scanned text, exactly as it is today.
+
+**Verified.** `tests/unit/test_protocol_fields.py` proves the predicate
+in isolation (position match, value match, and — the fail-safe case —
+a non-enum value at the `role` position still returns `False`).
+`tests/unit/test_sanitize.py` and
+`tests/regression/test_role_field_pii_misclassification.py` reproduce
+the original defect with a stub `Tier2Model` that deterministically
+misfires on `"user"`/`"assistant"` (no real GLiNER weights required)
+and prove both halves of the invariant end-to-end: a legal role value
+survives the misfire unchanged, and a non-conforming value at the role
+position is still fully detected and substituted. Full fast suite
+(`pytest`), `ruff`, and `mypy --strict src` all pass with no
+regressions.

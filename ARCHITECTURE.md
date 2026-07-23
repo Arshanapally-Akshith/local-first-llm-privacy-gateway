@@ -215,6 +215,23 @@ The mock is not a stub. It is the only component that can produce the failure co
 | **Dependencies** | Core types |
 | **Failure modes** | **The field you forget is the leak.** This is the highest-consequence, lowest-glamour component in the system. PII in a tool schema is still PII, and it never appears in a naive `messages[].content` demo. The covered-field list is enumerated deliberately and recorded in `PROJECT_STATE.md`. |
 
+**Walking a field and detecting PII in it are two separate decisions
+(Phase 7).** The walker enumerates every text-bearing field
+unconditionally, with no notion of what a field means — including a
+message's `role`, which it always finds and always round-trips through
+`rebuild()`. Whether a given region is actually handed to the detection
+cascade is a policy decision that lives one layer up, in
+`src/pipeline/sanitize.py`, via `src/pipeline/protocol_fields.py`: a
+region is skipped from detection only if its structural path matches a
+declared wire-protocol enum position *and* its value is genuinely one
+of that field's finite legal members (e.g. `messages[].role` holding
+`"user"`) — never by field name alone. A value at that same position
+that isn't a legal member still gets full detection, so this can never
+become a channel for smuggling real content past the gateway through a
+field assumed safe to skip. This closes the `role`-field
+misclassification defect recorded in `docs/LIMITATIONS.md` and
+`docs/DECISIONS.md` (2026-07-22, 2026-07-23).
+
 ### 4. Detection Pipeline
 
 | | |

@@ -34,6 +34,7 @@ from src.core.logging import get_gateway_logger, log_event, redact_safe
 from src.core.types import CorrelationId
 from src.detect.cascade import detect
 from src.detect.tier2.model import Tier2Model
+from src.pipeline import protocol_fields
 from src.pipeline.field_walker import FieldPath, JSONValue, TextRegion, rebuild, walk
 from src.session.candidates import NAME_MAP_ENTITY_TYPES, get_candidates
 from src.session.session import Session
@@ -54,10 +55,20 @@ def sanitize(
 ) -> dict[str, JSONValue]:
     """Return a new body with every detected Tier-1 and Tier-2 entity
     replaced by its surrogate, at every text-bearing field
-    `field_walker.walk()` finds — system prompt, every message role,
+    `field_walker.walk()` finds — system prompt, message content,
     tool/function definitions, tool-result messages, function-call
     arguments, `name` fields (see `field_walker.py`'s own docstring for
     the traversal rules). Does not mutate `body`.
+
+    A region whose path and value match a declared
+    `protocol_fields.ProtocolEnumField` (e.g. a message's `role`,
+    holding one of its legal values) is walked and rebuilt like any
+    other field, but never handed to `detect()` at all — it is wire
+    protocol metadata, not natural-language content, and cannot be a
+    detection target by construction. See `protocol_fields.py`'s module
+    docstring for why this is a value-membership check, not a
+    field-name exclusion, and `docs/LIMITATIONS.md`/`docs/DECISIONS.md`
+    for the misclassification defect this closes.
 
     A span already recognised as a surrogate this session minted on an
     earlier turn (`ResolvedSpan.is_ingress_surrogate`) is left exactly
@@ -86,6 +97,8 @@ def sanitize(
     now = clock.now()
     substitutions: dict[FieldPath, str] = {}
     for region in walk(body):
+        if protocol_fields.is_protocol_enum_value(region.path, region.text):
+            continue
         new_text = _sanitize_region(
             region, key_provider, session, now, correlation_id, tier2_model, fail_mode, rng
         )
