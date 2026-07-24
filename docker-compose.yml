@@ -10,6 +10,15 @@
 # native development workflow (`tasks.ps1 install`/`mock`/`run`), which
 # remains exactly as it was -- see README.md's Quick Start, "Option B."
 
+volumes:
+  hf-cache:
+    # Persists the Tier-2 model's downloaded weights across container
+    # recreations. Without this, huggingface_hub re-downloads the model
+    # into the ephemeral container filesystem on every `docker compose up`
+    # after the first, not just the very first ever build -- verified for
+    # real: a fresh container (no cache) took ~100s just to fetch the
+    # model's 4 files before warmup could even begin.
+
 services:
   mock-upstream:
     build: .
@@ -54,14 +63,24 @@ services:
       # Container-network DNS name, not 127.0.0.1 -- `mock-upstream` is a
       # separate container on this compose file's own network.
       UPSTREAM_BASE_URL: "http://mock-upstream:8081"
+    volumes:
+      - hf-cache:/root/.cache/huggingface
     healthcheck:
       # /health is real (app/main.py) -- but startup here includes loading
-      # and warming the Tier-2 model (NER_WARMUP defaults to true), which
-      # BUILD.md's own Phase 4 measured at several to tens of seconds on
-      # CPU. Generous retries/interval so the demo doesn't report
-      # "unhealthy" during a warm-up that is working exactly as intended.
+      # and warming the Tier-2 model (NER_WARMUP defaults to true).
+      # Verified for real against a genuinely fresh container (empty
+      # hf-cache volume): downloading the model's weights alone took
+      # ~100s, before warm-up inference even starts -- a tighter budget
+      # (previously interval=3s/retries=40, ~2 minutes total) measurably
+      # flipped this container to "unhealthy" mid-download on that exact
+      # run, even though it went on to finish and become healthy once
+      # checks started passing again. retries/interval widened here to
+      # tolerate a genuine first-ever download comfortably; every run
+      # after the first reuses hf-cache and warms in the several-to-tens-
+      # of-seconds range this project's own Phase 7 cold-start numbers
+      # already measured (`latency/results/latest.md`).
       test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8080/health', timeout=3)"]
-      interval: 3s
+      interval: 5s
       timeout: 5s
-      retries: 40
-      start_period: 10s
+      retries: 90
+      start_period: 15s
