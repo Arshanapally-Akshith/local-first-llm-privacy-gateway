@@ -328,5 +328,4 @@ engineering decision, with alternatives considered:
 
 ## License
 
-Not yet decided — no `LICENSE` file exists in this repository yet. Treat
-this repository as all-rights-reserved until one is added.
+This project is licensed under the MIT License. See the [LICENSE](LICENSE) file for details.
