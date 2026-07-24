@@ -67,8 +67,9 @@ Want to run this yourself instead of watching it? Skip to
 - **Zero persistence** — no vault, no database. The one unavoidable piece of
   state (the name map) is in-memory and session-scoped, and dies with the
   session.
-- **Runs with zero API key** — a mock upstream is the default and only
-  upstream this repository's tests, benchmarks, and demo ever use.
+- **No real provider API key required** — a bundled mock upstream stands
+  in for the cloud LLM provider and is the default and only upstream this
+  repository's tests, benchmarks, and demo ever use.
 - **Every number reproducible** — detection accuracy, adversarial
   robustness, and latency are each measured by a committed runner, never
   hand-typed into this document.
@@ -149,12 +150,15 @@ this, not something wrong with this repository.)
 docker compose up --build -d
 ```
 
+The `-d` flag runs the containers in the background instead of tying up
+this window with streaming logs — that's what lets you keep using this
+same terminal for every remaining step below.
+
 **What to expect:** several minutes of scrolling build output the first
 time you ever run this (it's downloading and installing dependencies,
 including a machine-learning model — this is normal, not stuck). When it
 finishes, you'll see two lines ending in `Started`, and the command
-returns you to your prompt (the `-d` flag means "run in the background" —
-that's what makes this a one-terminal setup). **First run: roughly 3–4
+returns you to your prompt. **First run: roughly 3–4
 minutes.** Every run after that reuses what was already downloaded and
 takes about 90 seconds.
 
@@ -178,6 +182,11 @@ If either row says `(health: starting)` instead of `(healthy)`, the
 gateway is still loading its detection model — wait about 30 seconds and
 run `docker compose ps` again. Once both say `(healthy)`, go to
 [Confirm it's actually working](#confirm-its-actually-working) below.
+
+Want to watch the gateway's own logs while it runs, without giving up
+this terminal? Run `docker compose logs -f gateway` (`-f` follows the log
+continuously; press `Ctrl+C` to stop watching — this does not stop the
+container).
 
 **When you're done trying it out**, stop everything with (same window):
 
