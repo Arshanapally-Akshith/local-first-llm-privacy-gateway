@@ -116,7 +116,7 @@ latency-bench`). Headline numbers, commit `ab7222a`:
 - **Cold start** (n=10 fresh processes): mean 16,659ms, p95 20,343ms,
   p99 21,501ms, min 14,645ms, max 21,790ms — "first inference is
   seconds," confirmed, and excluded from every steady-state row.
-- **39 of 40 cells completed with zero timeouts and zero errors.**
+- **38 of 40 cells completed with zero timeouts and zero errors.**
   The two non-clean cells are both `multiturn_5`: concurrency=8 (199/200
   completed, 1 timeout) and concurrency=16 (177/200 completed, 22
   timeouts, 1 error) — directly attributable to the event-loop
