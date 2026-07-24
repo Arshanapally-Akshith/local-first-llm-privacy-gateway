@@ -90,47 +90,127 @@ reasoning behind every frozen decision are in
 
 ## Try it yourself
 
-No API key or account is required anywhere below — the mock upstream is
-the default and only upstream this repository's tests, benchmarks, and
-demo ever use. Run every command from a terminal, in the root of a
-cloned copy of this repository:
+This section is a complete walkthrough — clone, run, and confirm the
+project actually works — written for someone who has never touched this
+repository before. No API key or account is needed anywhere below.
+
+A **terminal** here means PowerShell on Windows (press the **Start**
+button, type `powershell`, press **Enter**). Every command below is typed
+into a terminal window and run by pressing **Enter**. When a step says to
+open a **new** terminal window, do exactly that — leave whatever is
+already running alone, and open a second, separate PowerShell window
+(Start → type `powershell` → Enter, again) instead of typing into the
+first one.
+
+There are two ways to run the project, compared here so you can pick one
+before reading further:
+
+| | **Docker** (recommended) | **Native** |
+|---|---|---|
+| Best for | Just trying it out, on any OS | Reading/editing the Python code |
+| You need installed | [Docker Desktop](https://www.docker.com/products/docker-desktop/) | Python 3.11+ |
+| Terminal windows needed | 1, total | 3, total |
+| Jump to | [Docker path](#the-docker-path) | [Native path](#the-native-path) |
+
+If you're not sure which to pick, use Docker — it's fewer steps and
+works the same way on Windows, macOS, and Linux.
+
+### Clone the repository
+
+Do this once, regardless of which path you pick below. In a terminal
+window:
 
 ```powershell
 git clone https://github.com/Arshanapally-Akshith/local-first-llm-privacy-gateway.git
 cd local-first-llm-privacy-gateway
 ```
 
-### Step 1: start the gateway — pick one path
+**What to expect:** Git prints a few lines about the download, then
+returns you to the prompt. You're now "in" the repository folder for
+every command that follows — the rest of this walkthrough assumes your
+terminal is still in this folder.
 
-| | Docker (recommended) | Native |
-|---|---|---|
-| **Best for** | Trying it out, any OS | Editing the code |
-| **Requires** | [Docker Desktop](https://www.docker.com/products/docker-desktop/) with Compose v2 | Windows + PowerShell + Python 3.11+ |
-| **Steps** | 1 command | 2 terminals, a few commands |
+### The Docker path
 
-**Docker** — works on Windows, macOS, or Linux (make sure Docker Desktop
-is actually running first — a common first-try error is `docker: cannot
-connect to the Docker daemon`, which just means Docker Desktop itself
-hasn't started yet):
+Everything in this path happens in the **one** terminal window you
+already have open from the clone step — you will not need to open
+another one.
+
+**Step 1 — make sure Docker Desktop is actually running.** Look for the
+Docker whale icon in your system tray/menu bar; open the Docker Desktop
+application if it isn't already running and wait for it to say it's
+ready. (If you skip this, the next command fails immediately with
+`docker: cannot connect to the Docker daemon` — that error means exactly
+this, not something wrong with this repository.)
+
+**Step 2 — build and start the project**, in the same terminal window:
 
 ```powershell
-.\tasks.ps1 demo
-# equivalent on any OS:
-docker compose up --build
+docker compose up --build -d
 ```
 
-Wait until `docker compose ps` shows both containers as `healthy`, then
-go to [Step 2](#step-2-verify-its-actually-sanitizing-pii). First run
-takes roughly 3–4 minutes (image build, plus a one-time Tier-2 model
-download into a cached Docker volume); later runs take about 90 seconds.
-`docker-compose.yml` fills in the three settings that have no default in
-the app itself (`FPE_KEY`, `SESSION_TTL`, `FAIL_MODE`) with clearly-labeled
-placeholder values, the same non-secret-placeholder pattern
-`tests/conftest.py` uses — see that file's own comments for why each has
-no default.
+**What to expect:** several minutes of scrolling build output the first
+time you ever run this (it's downloading and installing dependencies,
+including a machine-learning model — this is normal, not stuck). When it
+finishes, you'll see two lines ending in `Started`, and the command
+returns you to your prompt (the `-d` flag means "run in the background" —
+that's what makes this a one-terminal setup). **First run: roughly 3–4
+minutes.** Every run after that reuses what was already downloaded and
+takes about 90 seconds.
 
-**Native** — Windows + PowerShell only; use this if you plan to edit the
-code (on macOS/Linux, use Docker instead — `tasks.ps1` is PowerShell-only):
+**Step 3 — confirm both containers are healthy**, same terminal window:
+
+```powershell
+docker compose ps
+```
+
+**What to expect:** a small table like this — the exact container names
+and elapsed time may differ, what matters is the word in parentheses at
+the end of `STATUS`:
+
+```
+NAME                                              STATUS
+local-first-llm-privacy-gateway-gateway-1         Up 8 seconds (healthy)
+local-first-llm-privacy-gateway-mock-upstream-1   Up 11 seconds (healthy)
+```
+
+If either row says `(health: starting)` instead of `(healthy)`, the
+gateway is still loading its detection model — wait about 30 seconds and
+run `docker compose ps` again. Once both say `(healthy)`, go to
+[Confirm it's actually working](#confirm-its-actually-working) below.
+
+**When you're done trying it out**, stop everything with (same window):
+
+```powershell
+docker compose down
+```
+
+This stops and removes the containers but keeps the downloaded model
+cached, so the next `docker compose up --build -d` you ever run is fast
+again, not another 3–4 minutes.
+
+<details>
+<summary>Prefer to watch the logs live instead of running in the background? Click to expand.</summary>
+
+`.\tasks.ps1 demo` runs the exact same thing as `docker compose up --build`
+(no `-d`), except it stays in the foreground and streams both containers'
+logs to your terminal continuously. That's useful for watching what's
+happening, but it also means that terminal window is now busy — press
+`Ctrl+C` to stop it (this also stops the containers), or open a *second*
+terminal window if you want to run other commands (like the verification
+step below) while it keeps streaming.
+
+</details>
+
+### The Native path
+
+Use this only if you plan to read or edit the Python source directly —
+it's more steps than Docker and needs three separate terminal windows by
+the end. `tasks.ps1` (the script every command below runs) only works in
+Windows PowerShell; on macOS/Linux, use the Docker path instead.
+
+**Step 1 — set up the project**, in the terminal window from the clone
+step:
 
 ```powershell
 python -m venv venv
@@ -139,34 +219,60 @@ python -m venv venv
 copy .env.example .env
 ```
 
-Then start two long-running processes, each in its own terminal (both
-must stay open):
+**What to expect:** `Activate.ps1` changes your prompt to start with
+`(venv)`; `tasks.ps1 install` prints package-installation output for a
+minute or two; `copy` prints nothing on success. All four commands run in
+this same, first terminal window.
+
+**Step 2 — start the mock upstream.** Still in this first window:
 
 ```powershell
-# Terminal 1
 .\tasks.ps1 mock
+```
 
-# Terminal 2 — activate the venv again first (.\venv\Scripts\Activate.ps1)
+**What to expect:** this prints `Uvicorn running on http://127.0.0.1:8081`
+and then **does not return your prompt** — it's now running continuously
+in this window. **Leave this window open and untouched** for as long as
+you want the project running; every remaining step happens in *other*
+windows.
+
+**Step 3 — start the gateway.** Open a **new, second** terminal window
+(Start → `powershell` → Enter). In this new window:
+
+```powershell
+cd local-first-llm-privacy-gateway
+.\venv\Scripts\Activate.ps1
 .\tasks.ps1 run
 ```
 
-Once both print `Uvicorn running on http://...`, go to
-[Step 2](#step-2-verify-its-actually-sanitizing-pii).
+(You need `cd` and `Activate.ps1` again here — a new terminal window
+starts fresh, in your home folder, without the virtual environment from
+Step 1.) **What to expect:** same as Step 2 — it prints `Uvicorn running
+on http://127.0.0.1:8080` and then sits there running. **Leave this
+second window open too.**
 
-This native setup is also the one to use for actually developing against
-this codebase (`run`/`mock` both use `uvicorn --reload`, so edits apply
-immediately) — it's a separate concern from the evaluation runners
-further down this README (`bench`, `adversarial`, `latency-bench`,
-`test`, `check`): each of those starts and stops its own gateway/mock
-process internally and does **not** need `run`/`mock` already running.
-Only `tasks.ps1 install` is a shared prerequisite for those.
+You now have two windows open and running (mock upstream and gateway) and
+neither will accept further typing — that's expected. Open a **third**
+terminal window for the verification step below.
 
-### Step 2: verify it's actually sanitizing PII
+*Why two long-running processes:* the "mock upstream" stands in for a
+real cloud LLM provider (so no API key is ever needed), and the gateway
+is the actual privacy proxy sitting in front of it. This native setup is
+also what you'd use to edit the code and see changes take effect
+immediately (`run`/`mock` both auto-reload on save) — it's unrelated to
+the evaluation commands further down this README (`bench`, `adversarial`,
+`latency-bench`, `test`, `check`), each of which starts and stops its own
+processes on its own and does not need these two windows open at all.
 
-Either path above leaves the gateway reachable at
-`http://localhost:8080`. Send a request containing a synthetic Aadhaar
-number and confirm the gateway substitutes it before forwarding, then
-restores it in the response:
+**When you're done**, press `Ctrl+C` in the mock-upstream window and
+again in the gateway window to stop both.
+
+### Confirm it's actually working
+
+Whichever path you used, the gateway is now listening at
+`http://localhost:8080`. Run this in whichever terminal window is free —
+for Docker, that's the same one window; for Native, that's your third
+window:
 
 ```powershell
 $body = @{
@@ -179,41 +285,47 @@ Invoke-RestMethod -Uri "http://localhost:8080/v1/chat/completions" -Method Post 
   -Headers @{ "X-Session-Id" = "quickstart-check" } -ContentType "application/json" -Body $body
 ```
 
-Use `Invoke-RestMethod`, not `curl`/`curl.exe` — PowerShell's argument
-quoting mangles inline JSON passed to a native executable's `-d` flag
-(tested; it produces a malformed request the gateway rejects).
-`999910433219` is a synthetic, Verhoeff-valid Aadhaar from UIDAI's
-documented reserved test range — not a real one, safe to reuse anywhere.
+Use `Invoke-RestMethod` exactly as written, not `curl`/`curl.exe` —
+PowerShell's argument quoting mangles inline JSON passed to a native
+executable's `-d` flag (tested; it produces a malformed request the
+gateway rejects). `999910433219` is a synthetic, Verhoeff-valid Aadhaar
+number from UIDAI's documented reserved test range — not a real person's,
+safe to reuse anywhere.
 
-**What you should see:**
+**What you should see, in order:**
 
-1. **The command above prints a response** whose `choices[0].message.content`
-   contains `999910433219` — your real input, unchanged from the caller's
-   point of view.
-2. **That alone isn't proof** — the mock upstream just echoes content back,
-   so step 1 would look identical whether or not sanitization happened.
-   The actual proof is in what the mock upstream logged as *received*.
-   Check its terminal (running `tasks.ps1 mock`), or run
-   `docker compose logs mock-upstream` for the Docker path, and look for
-   a line shaped like:
+1. **The command prints a response.** Look for `choices` in the output,
+   and inside it, `content` — it should read `My Aadhaar is
+   999910433219.`, your original input, unchanged from where you're
+   sitting.
+2. **That alone doesn't prove anything yet** — the mock upstream just
+   echoes back whatever content it receives, so this would look identical
+   whether or not the gateway actually did anything. The real proof is in
+   what the mock upstream says it *received*. Go look:
+   - **Docker:** run `docker compose logs mock-upstream` in your one
+     terminal window.
+   - **Native:** switch to (don't close) your **first** terminal window —
+     the one running `.\tasks.ps1 mock` — and read its output directly.
+3. **Look for a line like this** in that output:
 
    ```
    mock upstream received body: {'messages': [{'content': 'My Aadhaar is <a different 12-digit number>.', ...
    ```
 
-3. **If that number is different from `999910433219`**, the gateway
-   detected the real Aadhaar, replaced it with a format-preserving
-   surrogate before the request ever left the machine, and rehydrated the
-   real value back into the response you saw in step 1. That substitute-
-   then-restore round trip is this repository's entire reason for
-   existing. The [Demo](#demo) GIF above shows the same thing, with a
-   name added to the request too.
+4. **Compare the two numbers.** If the number the mock upstream received
+   is *different* from `999910433219` (the number you actually sent), the
+   gateway detected the real Aadhaar, replaced it with a fake-but-valid
+   look-alike before the request ever left your machine, sent *that* to
+   the mock provider, and swapped the real number back into the response
+   you read in step 1. That detect → replace → restore round trip is the
+   entire reason this project exists. The [Demo](#demo) GIF above shows
+   the same round trip, with a person's name added too.
 
-If the numbers matched (no substitution happened), something's
-misconfigured — check `docker compose logs gateway` (Docker) or the
-gateway's own terminal (native) for a startup error, most likely a
-missing or invalid `.env` value (native path only — the Docker path sets
-these for you).
+**If the two numbers matched** (no substitution happened), something's
+misconfigured. Check for a startup error: `docker compose logs gateway`
+(Docker), or scroll up in your gateway terminal window (Native) — the
+most likely cause is a missing or invalid value in your `.env` file
+(Native path only; the Docker path fills these in for you automatically).
 
 ## Performance / benchmarks
 
