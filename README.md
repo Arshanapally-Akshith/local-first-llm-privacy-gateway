@@ -15,7 +15,7 @@ from openai import OpenAI
 client = OpenAI(base_url="http://localhost:8080/v1", api_key="not-needed")
 ```
 
-That's the entire integration — with a one-line change, prompts stop leaking.. This
+That's the entire integration — one line changes, prompts stop leaking. This
 is a competent reimplementation of a pattern already shipped in production by
 Skyflow, Google Cloud DLP, and others (full list and framing in
 [Competitor comparison](#competitor-comparison)) — not a novel gateway
@@ -48,6 +48,9 @@ real values back.
 No screenshots beyond the terminal capture above — this is a CLI/API tool
 with no graphical interface to screenshot.
 
+Want to run this yourself instead of watching it? Skip to
+[Try it yourself](#try-it-yourself).
+
 ## Key features
 
 - **Drop-in OpenAI-compatible proxy** — one `base_url` change, no SDK, no
@@ -70,6 +73,9 @@ with no graphical interface to screenshot.
   robustness, and latency are each measured by a committed runner, never
   hand-typed into this document.
 
+See [Architecture](#architecture) for how these pieces fit together, or
+skip straight to [Try it yourself](#try-it-yourself) to run it.
+
 ## Architecture
 
 One OpenAI-compatible surface, a config/flag-driven upstream (mock by
@@ -82,89 +88,85 @@ frontend. Full component diagrams, request/response lifecycles, and the
 reasoning behind every frozen decision are in
 [`ARCHITECTURE.md`](ARCHITECTURE.md).
 
-## Quick start
+## Try it yourself
 
-No API key required — the mock upstream is the default and only upstream
-this repository's tests, benchmarks, and demo ever use.
+No API key or account is required anywhere below — the mock upstream is
+the default and only upstream this repository's tests, benchmarks, and
+demo ever use. Run every command from a terminal, in the root of a
+cloned copy of this repository:
 
-**Prerequisites:**
+```powershell
+git clone https://github.com/Arshanapally-Akshith/local-first-llm-privacy-gateway.git
+cd local-first-llm-privacy-gateway
+```
 
-- **Option A (Docker):** [Docker Desktop](https://www.docker.com/products/docker-desktop/)
-  with Compose v2 (bundled with any current Docker Desktop install; this
-  project uses the `docker compose` subcommand, not the older standalone
-  `docker-compose` binary). Works on Windows, macOS, or Linux.
-- **Option B (native):** Windows with PowerShell and Python 3.11+.
-  `tasks.ps1` is PowerShell-specific — on macOS/Linux, use Option A, or
-  run the commands each `tasks.ps1` target wraps directly (shown as
-  comments in [`tasks.ps1`](tasks.ps1)).
+### Step 1: start the gateway — pick one path
 
-### Option A: one-command demo (Docker)
+| | Docker (recommended) | Native |
+|---|---|---|
+| **Best for** | Trying it out, any OS | Editing the code |
+| **Requires** | [Docker Desktop](https://www.docker.com/products/docker-desktop/) with Compose v2 | Windows + PowerShell + Python 3.11+ |
+| **Steps** | 1 command | 2 terminals, a few commands |
+
+**Docker** — works on Windows, macOS, or Linux (make sure Docker Desktop
+is actually running first — a common first-try error is `docker: cannot
+connect to the Docker daemon`, which just means Docker Desktop itself
+hasn't started yet):
 
 ```powershell
 .\tasks.ps1 demo
-# or, equivalently, on any OS:
+# equivalent on any OS:
 docker compose up --build
 ```
 
-Builds and starts both containers — the mock upstream and the gateway,
-wired together with no `.env` step required. Real, measured timings (not
-the native numbers in [Latency](#latency-phase-7) below, which assume an
-already-cached model — a fresh container is slower): **the very first
-run** takes roughly 3–4 minutes end to end (image build, plus the Tier-2
-model's weights downloading into a named Docker volume, `hf-cache`, the
-first time only); **every run after that** re-uses the cached image
-layers and the `hf-cache` volume, and the gateway's own startup (model
-load + warm-up, no re-download) took about 90 seconds measured on this
-machine — noticeably slower than the native ~15–25s in the Latency table,
-which this project attributes to container filesystem/virtualization
-overhead on the model-loading step specifically, not to anything about
-the gateway's own code. `docker-compose.yml` uses clearly-labeled,
-non-secret placeholder values for the settings that have no default in
-the application itself by design (`FPE_KEY`, `SESSION_TTL`, `FAIL_MODE`)
-— the same "placeholder, not a real credential" precedent
-`tests/conftest.py` already uses; see the compose file's own comments.
-Once the gateway container reports healthy (`docker compose ps`), jump to
-[Verify it works](#verify-it-works) below.
+Wait until `docker compose ps` shows both containers as `healthy`, then
+go to [Step 2](#step-2-verify-its-actually-sanitizing-pii). First run
+takes roughly 3–4 minutes (image build, plus a one-time Tier-2 model
+download into a cached Docker volume); later runs take about 90 seconds.
+`docker-compose.yml` fills in the three settings that have no default in
+the app itself (`FPE_KEY`, `SESSION_TTL`, `FAIL_MODE`) with clearly-labeled
+placeholder values, the same non-secret-placeholder pattern
+`tests/conftest.py` uses — see that file's own comments for why each has
+no default.
 
-### Option B: native (for development)
+**Native** — Windows + PowerShell only; use this if you plan to edit the
+code (on macOS/Linux, use Docker instead — `tasks.ps1` is PowerShell-only):
 
 ```powershell
-# 1. Create and activate a virtual environment (recommended — keeps this
-#    project's dependencies out of your system Python)
 python -m venv venv
 .\venv\Scripts\Activate.ps1
-
-# 2. Install
 .\tasks.ps1 install
-
-# 3. Configure (copy and fill in — FPE_KEY/SESSION_TTL/FAIL_MODE have no
-#    default on purpose; see .env.example for why)
 copy .env.example .env
+```
 
-# 4. Run the mock upstream (leave this terminal open)
+Then start two long-running processes, each in its own terminal (both
+must stay open):
+
+```powershell
+# Terminal 1
 .\tasks.ps1 mock
 
-# 5. In a second terminal, activate the venv again, then run the gateway
-.\venv\Scripts\Activate.ps1
+# Terminal 2 — activate the venv again first (.\venv\Scripts\Activate.ps1)
 .\tasks.ps1 run
 ```
 
-This is the setup to use for actually developing against this codebase —
-editing source and seeing it reflected immediately (`run`/`mock` both use
-`uvicorn --reload`). It is a separate concern from the evaluation runners
-below (`bench`, `adversarial`, `latency-bench`, `test`, `check`): each of
-those manages its own gateway/mock process internally (in-process for
-`bench`/`adversarial`/`test`/`check`, real subprocesses on different ports
-for `latency-bench`) and does **not** require `run`/`mock` to already be
-running — only `tasks.ps1 install` (or its dev/benchmark variants) is a
-shared prerequisite. Option A is for a quick look at the running system,
-not a replacement for this workflow.
+Once both print `Uvicorn running on http://...`, go to
+[Step 2](#step-2-verify-its-actually-sanitizing-pii).
 
-### Verify it works
+This native setup is also the one to use for actually developing against
+this codebase (`run`/`mock` both use `uvicorn --reload`, so edits apply
+immediately) — it's a separate concern from the evaluation runners
+further down this README (`bench`, `adversarial`, `latency-bench`,
+`test`, `check`): each of those starts and stops its own gateway/mock
+process internally and does **not** need `run`/`mock` already running.
+Only `tasks.ps1 install` is a shared prerequisite for those.
 
-With the gateway reachable at `http://localhost:8080` (either option
-above), confirm it's actually sanitizing PII, not just echoing text back
-unchanged:
+### Step 2: verify it's actually sanitizing PII
+
+Either path above leaves the gateway reachable at
+`http://localhost:8080`. Send a request containing a synthetic Aadhaar
+number and confirm the gateway substitutes it before forwarding, then
+restores it in the response:
 
 ```powershell
 $body = @{
@@ -177,31 +179,41 @@ Invoke-RestMethod -Uri "http://localhost:8080/v1/chat/completions" -Method Post 
   -Headers @{ "X-Session-Id" = "quickstart-check" } -ContentType "application/json" -Body $body
 ```
 
-(`Invoke-RestMethod`, not `curl`/`curl.exe` — PowerShell's own argument
-quoting mangles inline JSON passed to a native executable like `curl.exe`
-on a `-d` flag; this was tested and produces a malformed request.
-`Invoke-RestMethod` builds the request natively and is the reliable
-choice from PowerShell. `999910433219` is a synthetic, Verhoeff-valid
-Aadhaar from UIDAI's documented reserved test range, not a real one —
-safe to use in any example.)
+Use `Invoke-RestMethod`, not `curl`/`curl.exe` — PowerShell's argument
+quoting mangles inline JSON passed to a native executable's `-d` flag
+(tested; it produces a malformed request the gateway rejects).
+`999910433219` is a synthetic, Verhoeff-valid Aadhaar from UIDAI's
+documented reserved test range — not a real one, safe to reuse anywhere.
 
-**Expected response:** a PowerShell object (auto-printed as its fields)
-whose `choices[0].message.content` contains `999910433219` — the real
-value, rehydrated. That alone doesn't
-prove sanitization happened, since the mock upstream just echoes content
-back; the proof is in what it echoed *from*. Check the mock upstream's own
-log (the terminal running `tasks.ps1 mock`, or `docker compose logs
-mock-upstream` for Option A) for a line like:
+**What you should see:**
 
-```
-mock upstream received body: {'messages': [{'content': 'My Aadhaar is <a different 12-digit number>.', ...
-```
+1. **The command above prints a response** whose `choices[0].message.content`
+   contains `999910433219` — your real input, unchanged from the caller's
+   point of view.
+2. **That alone isn't proof** — the mock upstream just echoes content back,
+   so step 1 would look identical whether or not sanitization happened.
+   The actual proof is in what the mock upstream logged as *received*.
+   Check its terminal (running `tasks.ps1 mock`), or run
+   `docker compose logs mock-upstream` for the Docker path, and look for
+   a line shaped like:
 
-If that number is different from `999910433219`, the gateway substituted
-a surrogate before the request left the machine, and rehydrated the real
-value on the way back — the entire mechanism this repository exists to
-demonstrate. The [Demo](#demo) GIF above shows exactly this, with a name
-added to the request too.
+   ```
+   mock upstream received body: {'messages': [{'content': 'My Aadhaar is <a different 12-digit number>.', ...
+   ```
+
+3. **If that number is different from `999910433219`**, the gateway
+   detected the real Aadhaar, replaced it with a format-preserving
+   surrogate before the request ever left the machine, and rehydrated the
+   real value back into the response you saw in step 1. That substitute-
+   then-restore round trip is this repository's entire reason for
+   existing. The [Demo](#demo) GIF above shows the same thing, with a
+   name added to the request too.
+
+If the numbers matched (no substitution happened), something's
+misconfigured — check `docker compose logs gateway` (Docker) or the
+gateway's own terminal (native) for a startup error, most likely a
+missing or invalid `.env` value (native path only — the Docker path sets
+these for you).
 
 ## Performance / benchmarks
 
