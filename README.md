@@ -15,7 +15,7 @@ from openai import OpenAI
 client = OpenAI(base_url="http://localhost:8080/v1", api_key="...")
 ```
 
-That's the entire integration — one line changes, prompts stop leaking. This
+That's the entire integration — with a one-line change, prompts stop leaking.. This
 is a competent reimplementation of a pattern already shipped in production by
 Skyflow, Google Cloud DLP, and others (full list and framing in
 [Competitor comparison](#competitor-comparison)) — not a novel gateway
@@ -318,13 +318,16 @@ within a single gateway process.
 | 5 | Detection benchmark | Done |
 | 6 | Adversarial bypass suite | Done |
 | 7 | Latency harness | Done |
-| 8 | Demo, README, release | In progress (this document) |
+| 8 | Demo, README, release | Done |
 
 Per-phase detail, decisions, and manual-verification steps:
 [`docs/PHASE_0_SUMMARY.md`](docs/PHASE_0_SUMMARY.md) through
 [`docs/PHASE_7_SUMMARY.md`](docs/PHASE_7_SUMMARY.md). Every non-obvious
 engineering decision, with alternatives considered:
 [`docs/DECISIONS.md`](docs/DECISIONS.md) (append-only).
+
+This repository is feature-complete. Future changes will focus on bug fixes,
+benchmark updates, and maintenance rather than expanding scope.
 
 ## License
 
