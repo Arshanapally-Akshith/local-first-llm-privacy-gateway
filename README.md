@@ -12,7 +12,7 @@ side notices the proxy.
 ```python
 from openai import OpenAI
 
-client = OpenAI(base_url="http://localhost:8080/v1", api_key="...")
+client = OpenAI(base_url="http://localhost:8080/v1", api_key="not-needed")
 ```
 
 That's the entire integration — with a one-line change, prompts stop leaking.. This
@@ -87,56 +87,121 @@ reasoning behind every frozen decision are in
 No API key required — the mock upstream is the default and only upstream
 this repository's tests, benchmarks, and demo ever use.
 
+**Prerequisites:**
+
+- **Option A (Docker):** [Docker Desktop](https://www.docker.com/products/docker-desktop/)
+  with Compose v2 (bundled with any current Docker Desktop install; this
+  project uses the `docker compose` subcommand, not the older standalone
+  `docker-compose` binary). Works on Windows, macOS, or Linux.
+- **Option B (native):** Windows with PowerShell and Python 3.11+.
+  `tasks.ps1` is PowerShell-specific — on macOS/Linux, use Option A, or
+  run the commands each `tasks.ps1` target wraps directly (shown as
+  comments in [`tasks.ps1`](tasks.ps1)).
+
 ### Option A: one-command demo (Docker)
 
 ```powershell
 .\tasks.ps1 demo
-# or, equivalently:
+# or, equivalently, on any OS:
 docker compose up --build
 ```
 
 Builds and starts both containers — the mock upstream and the gateway,
-wired together with no `.env` step required — then point any
-OpenAI-compatible client at `http://localhost:8080/v1`. Real, measured
-timings (not the native numbers in [Latency](#latency-phase-7) below,
-which assume an already-cached model — a fresh container is slower):
-**the very first run** takes roughly 3–4 minutes end to end (image build,
-plus the Tier-2 model's weights downloading into a named Docker volume,
-`hf-cache`, the first time only); **every run after that** re-uses the
-cached image layers and the `hf-cache` volume, and the gateway's own
-startup (model load + warm-up, no re-download) took about 90 seconds
-measured on this machine — noticeably slower than the native ~15–25s in
-the Latency table, which this project attributes to container filesystem/
-virtualization overhead on the model-loading step specifically, not to
-anything about the gateway's own code. `docker-compose.yml` uses
-clearly-labeled, non-secret placeholder values for the settings that have
-no default in the application itself by design (`FPE_KEY`, `SESSION_TTL`,
-`FAIL_MODE`) — the same "placeholder, not a real credential" precedent
+wired together with no `.env` step required. Real, measured timings (not
+the native numbers in [Latency](#latency-phase-7) below, which assume an
+already-cached model — a fresh container is slower): **the very first
+run** takes roughly 3–4 minutes end to end (image build, plus the Tier-2
+model's weights downloading into a named Docker volume, `hf-cache`, the
+first time only); **every run after that** re-uses the cached image
+layers and the `hf-cache` volume, and the gateway's own startup (model
+load + warm-up, no re-download) took about 90 seconds measured on this
+machine — noticeably slower than the native ~15–25s in the Latency table,
+which this project attributes to container filesystem/virtualization
+overhead on the model-loading step specifically, not to anything about
+the gateway's own code. `docker-compose.yml` uses clearly-labeled,
+non-secret placeholder values for the settings that have no default in
+the application itself by design (`FPE_KEY`, `SESSION_TTL`, `FAIL_MODE`)
+— the same "placeholder, not a real credential" precedent
 `tests/conftest.py` already uses; see the compose file's own comments.
+Once the gateway container reports healthy (`docker compose ps`), jump to
+[Verify it works](#verify-it-works) below.
 
 ### Option B: native (for development)
 
 ```powershell
-# 1. Install
+# 1. Create and activate a virtual environment (recommended — keeps this
+#    project's dependencies out of your system Python)
+python -m venv venv
+.\venv\Scripts\Activate.ps1
+
+# 2. Install
 .\tasks.ps1 install
 
-# 2. Configure (copy and fill in — FPE_KEY/SESSION_TTL/FAIL_MODE have no
+# 3. Configure (copy and fill in — FPE_KEY/SESSION_TTL/FAIL_MODE have no
 #    default on purpose; see .env.example for why)
 copy .env.example .env
 
-# 3. Run the mock upstream (leave this terminal open)
+# 4. Run the mock upstream (leave this terminal open)
 .\tasks.ps1 mock
 
-# 4. In a second terminal, run the gateway
+# 5. In a second terminal, activate the venv again, then run the gateway
+.\venv\Scripts\Activate.ps1
 .\tasks.ps1 run
-
-# 5. Point any OpenAI-compatible client at http://localhost:8080/v1
 ```
 
-This is the workflow every other command in this README (`bench`,
-`adversarial`, `latency-bench`, `test`, `check`, ...) assumes, and the one
-to use for actually developing against this codebase — Option A is for a
-quick look, not a replacement for it.
+This is the setup to use for actually developing against this codebase —
+editing source and seeing it reflected immediately (`run`/`mock` both use
+`uvicorn --reload`). It is a separate concern from the evaluation runners
+below (`bench`, `adversarial`, `latency-bench`, `test`, `check`): each of
+those manages its own gateway/mock process internally (in-process for
+`bench`/`adversarial`/`test`/`check`, real subprocesses on different ports
+for `latency-bench`) and does **not** require `run`/`mock` to already be
+running — only `tasks.ps1 install` (or its dev/benchmark variants) is a
+shared prerequisite. Option A is for a quick look at the running system,
+not a replacement for this workflow.
+
+### Verify it works
+
+With the gateway reachable at `http://localhost:8080` (either option
+above), confirm it's actually sanitizing PII, not just echoing text back
+unchanged:
+
+```powershell
+$body = @{
+    model    = "gpt-4"
+    stream   = $false
+    messages = @(@{ role = "user"; content = "My Aadhaar is 999910433219." })
+} | ConvertTo-Json -Depth 5
+
+Invoke-RestMethod -Uri "http://localhost:8080/v1/chat/completions" -Method Post `
+  -Headers @{ "X-Session-Id" = "quickstart-check" } -ContentType "application/json" -Body $body
+```
+
+(`Invoke-RestMethod`, not `curl`/`curl.exe` — PowerShell's own argument
+quoting mangles inline JSON passed to a native executable like `curl.exe`
+on a `-d` flag; this was tested and produces a malformed request.
+`Invoke-RestMethod` builds the request natively and is the reliable
+choice from PowerShell. `999910433219` is a synthetic, Verhoeff-valid
+Aadhaar from UIDAI's documented reserved test range, not a real one —
+safe to use in any example.)
+
+**Expected response:** a PowerShell object (auto-printed as its fields)
+whose `choices[0].message.content` contains `999910433219` — the real
+value, rehydrated. That alone doesn't
+prove sanitization happened, since the mock upstream just echoes content
+back; the proof is in what it echoed *from*. Check the mock upstream's own
+log (the terminal running `tasks.ps1 mock`, or `docker compose logs
+mock-upstream` for Option A) for a line like:
+
+```
+mock upstream received body: {'messages': [{'content': 'My Aadhaar is <a different 12-digit number>.', ...
+```
+
+If that number is different from `999910433219`, the gateway substituted
+a surrogate before the request left the machine, and rehydrated the real
+value on the way back — the entire mechanism this repository exists to
+demonstrate. The [Demo](#demo) GIF above shows exactly this, with a name
+added to the request too.
 
 ## Performance / benchmarks
 
