@@ -27,16 +27,26 @@ runner in this repository — nothing here is hand-typed.
 
 ## Demo
 
-> **[PLACEHOLDER: 60–90s asciinema/GIF]**
-> Split terminal: left, a `curl` request carrying a synthetic Aadhaar and a
-> name; right, the gateway's own log showing tier hits and substitution, what
-> the mock upstream actually received (surrogates only), and the rehydrated
-> stream coming back with the real values. Not yet recorded.
->
-> **[PLACEHOLDER: screenshots]** None yet. This is a CLI/API tool with no UI
-> beyond terminal output, so any screenshots would show a terminal session
-> (e.g. the split view above) rather than a graphical interface — to be
-> added alongside the recording, not invented ahead of it.
+![Demo: starting the gateway with one command, sending a request with a synthetic Aadhaar and name, and watching the mock upstream receive only surrogates while the client gets the real values back](docs/assets/demo.gif)
+
+Every command, log line, and response above is real — captured from an
+actual `docker compose up --build` run and an actual request against the
+running gateway (a synthetic, Verhoeff-valid Aadhaar from the UIDAI
+reserved test range, `999910433219`, and a synthetic name, "Zara Arora,"
+neither belonging to a real person). It is **not** a raw screen recording:
+it's a small script that renders the real, verbatim captured text (the
+container startup, the request, the gateway's own detection/substitution
+log lines, what the mock upstream actually received, and the rehydrated
+response) as a paced terminal-style animation. The content is 100% real;
+only the animation's pacing was authored, the same way any edited demo
+recording is trimmed. It shows the four things this gateway's whole value
+proposition rests on, sequentially rather than in a literal split-screen:
+the one-command startup, the request leaving with real PII in it, the
+provider-facing side seeing surrogates only, and the caller getting the
+real values back.
+
+No screenshots beyond the terminal capture above — this is a CLI/API tool
+with no graphical interface to screenshot.
 
 ## Key features
 
@@ -87,11 +97,18 @@ docker compose up --build
 
 Builds and starts both containers — the mock upstream and the gateway,
 wired together with no `.env` step required — then point any
-OpenAI-compatible client at `http://localhost:8080/v1`. The first run
-builds the image and downloads the Tier-2 model's weights, which can take
-several minutes; subsequent runs reuse Docker's build cache and the
-gateway's own startup (model warm-up) takes several to tens of seconds, as
-measured in [Latency](#latency-phase-7) below. `docker-compose.yml` uses
+OpenAI-compatible client at `http://localhost:8080/v1`. Real, measured
+timings (not the native numbers in [Latency](#latency-phase-7) below,
+which assume an already-cached model — a fresh container is slower):
+**the very first run** takes roughly 3–4 minutes end to end (image build,
+plus the Tier-2 model's weights downloading into a named Docker volume,
+`hf-cache`, the first time only); **every run after that** re-uses the
+cached image layers and the `hf-cache` volume, and the gateway's own
+startup (model load + warm-up, no re-download) took about 90 seconds
+measured on this machine — noticeably slower than the native ~15–25s in
+the Latency table, which this project attributes to container filesystem/
+virtualization overhead on the model-loading step specifically, not to
+anything about the gateway's own code. `docker-compose.yml` uses
 clearly-labeled, non-secret placeholder values for the settings that have
 no default in the application itself by design (`FPE_KEY`, `SESSION_TTL`,
 `FAIL_MODE`) — the same "placeholder, not a real credential" precedent
