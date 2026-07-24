@@ -1,0 +1,67 @@
+# One-command local demo: `docker compose up --build` (or `.\tasks.ps1 demo`).
+#
+# Two services, one built image (see Dockerfile): `mock-upstream` (the
+# default and only upstream this repository's tests/benchmarks/demo ever
+# use -- zero API key, zero cost) and `gateway` (the actual privacy proxy).
+# `gateway` depends on `mock-upstream` being healthy first, so the very
+# first request the demo makes doesn't race a not-yet-ready upstream.
+#
+# This is the one-command *demo* path. It does not replace or change the
+# native development workflow (`tasks.ps1 install`/`mock`/`run`), which
+# remains exactly as it was -- see README.md's Quick Start, "Option B."
+
+services:
+  mock-upstream:
+    build: .
+    image: local-first-llm-privacy-gateway:latest
+    command: ["uvicorn", "src.mock_upstream.main:app", "--host", "0.0.0.0", "--port", "8081"]
+    ports:
+      - "8081:8081"
+    healthcheck:
+      # No /health endpoint exists on the mock (see src/mock_upstream/main.py's
+      # own docstring -- it was never given one). A bare TCP connect is a
+      # sufficient readiness signal here: this app does no model loading and
+      # no slow startup work, unlike the gateway below.
+      test: ["CMD", "python", "-c", "import socket; socket.create_connection(('localhost', 8081), timeout=2)"]
+      interval: 2s
+      timeout: 3s
+      retries: 15
+
+  gateway:
+    build: .
+    image: local-first-llm-privacy-gateway:latest
+    command: ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8080"]
+    ports:
+      - "8080:8080"
+    depends_on:
+      mock-upstream:
+        condition: service_healthy
+    environment:
+      # Demo-only, non-secret placeholder values -- the same "clearly-
+      # labeled placeholder, not a real credential" precedent
+      # tests/conftest.py already uses for these exact three settings,
+      # which have no code-level default by design (Settings itself is
+      # unchanged: a real deployment must still choose these consciously,
+      # per src/core/config.py and ARCHITECTURE.md's Configuration
+      # Architecture -- this file is just the demo's explicit choice, not
+      # a new default).
+      FPE_KEY: "demo-fpe-key-not-a-real-secret-change-for-production"
+      SESSION_TTL: "1800"
+      # fail-closed: this project's own stated defensible default for a
+      # privacy product (see README.md's Threat Model section) -- the demo
+      # uses the same position it documents, not a more permissive one.
+      FAIL_MODE: "closed"
+      # Container-network DNS name, not 127.0.0.1 -- `mock-upstream` is a
+      # separate container on this compose file's own network.
+      UPSTREAM_BASE_URL: "http://mock-upstream:8081"
+    healthcheck:
+      # /health is real (app/main.py) -- but startup here includes loading
+      # and warming the Tier-2 model (NER_WARMUP defaults to true), which
+      # BUILD.md's own Phase 4 measured at several to tens of seconds on
+      # CPU. Generous retries/interval so the demo doesn't report
+      # "unhealthy" during a warm-up that is working exactly as intended.
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8080/health', timeout=3)"]
+      interval: 3s
+      timeout: 5s
+      retries: 40
+      start_period: 10s

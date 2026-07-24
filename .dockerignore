@@ -1,0 +1,43 @@
+# Keeps the build context small and the image free of local dev state --
+# mirrors .gitignore's exclusions, plus git/CI metadata the image never
+# needs at runtime. requirements-dev.txt/requirements-benchmark.txt are
+# NOT installed into the demo image (runtime only), but their presence in
+# the build context is harmless either way; excluded anyway to keep the
+# context minimal.
+
+.git/
+.github/
+
+# Python
+__pycache__/
+**/__pycache__/
+*.py[cod]
+*$py.class
+*.egg-info/
+.eggs/
+build/
+dist/
+
+# Virtual environments -- never copied into the image; the image installs
+# its own dependencies directly
+venv/
+.venv/
+env/
+
+# Secrets -- a real .env must never enter a build context or image layer
+.env
+
+# Test / lint / type-check caches and local IDE state
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.hypothesis/
+.coverage
+htmlcov/
+.vscode/
+.idea/
+.claude/
+
+# Windows
+Thumbs.db
+desktop.ini

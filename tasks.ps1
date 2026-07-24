@@ -4,13 +4,19 @@
 
     Chosen over a Makefile because the target development machine is native
     Windows 11 PowerShell with no assumed bash/WSL/make installation
-    (see BUILD.md — "MY ENVIRONMENT"). Revisit for a Makefile-inside-Docker
-    setup at the Phase 8 one-command demo, not before.
+    (see BUILD.md — "MY ENVIRONMENT"). The Phase 8 one-command demo
+    (`demo`, below) wraps `docker compose`, not a Makefile -- this file
+    remains the one task runner for everything, native or containerized;
+    see docker-compose.yml's own docstring and README.md's Quick Start
+    for what `demo` does and does not change (the native
+    install/run/mock workflow below is unchanged and still the
+    documented development path).
 
 .EXAMPLE
     .\tasks.ps1 install
     .\tasks.ps1 run
     .\tasks.ps1 mock
+    .\tasks.ps1 demo
     .\tasks.ps1 test
     .\tasks.ps1 lint
     .\tasks.ps1 typecheck
@@ -19,7 +25,7 @@
 
 param(
     [Parameter(Position = 0)]
-    [ValidateSet("install", "run", "mock", "test", "lint", "typecheck", "check", "rehydration-fidelity", "bench", "adversarial", "latency-pilot", "latency-bench")]
+    [ValidateSet("install", "run", "mock", "demo", "test", "lint", "typecheck", "check", "rehydration-fidelity", "bench", "adversarial", "latency-pilot", "latency-bench")]
     [string]$Task = "check"
 )
 
@@ -38,6 +44,18 @@ switch ($Task) {
         # defaults, in .env.example, to this port). Run in a second
         # terminal alongside `run`.
         uvicorn src.mock_upstream.main:app --reload --port 8081
+    }
+    "demo" {
+        # BUILD.md, Phase 8: "One-command run... if setup has more than
+        # one step, it has zero users." Builds and starts both
+        # containers (docker-compose.yml) -- the mock upstream and the
+        # gateway, wired together with no manual .env step required.
+        # Does not touch, replace, or require the native
+        # install/run/mock workflow above; this is an additional path,
+        # not a replacement. First run builds the image (torch + GLiNER
+        # weights download on first start) and can take several minutes;
+        # subsequent runs reuse Docker's layer cache.
+        docker compose up --build
     }
     "test" {
         pytest tests
